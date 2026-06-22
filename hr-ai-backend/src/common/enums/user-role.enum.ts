@@ -1,0 +1,8 @@
+export enum UserRole {
+  COLLABORATOR = 'COLLABORATOR',
+  MANAGER = 'MANAGER',
+  HR = 'HR',
+  DIRECTION = 'DIRECTION',
+  ADMIN = 'ADMIN',
+  QVT = 'QVT',
+}

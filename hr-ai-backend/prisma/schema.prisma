@@ -1,0 +1,524 @@
+generator client {
+  provider     = "prisma-client-js"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ONBOARDING
+  OFFBOARDING
+  INACTIVE
+}
+
+enum AbsenceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum DocumentStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  ARCHIVED
+}
+
+enum WorkflowType {
+  ONBOARDING
+  OFFBOARDING
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+}
+
+enum ImportStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum OnboardingState {
+  OFF
+  ON
+  OFFBOARDING
+}
+
+enum HrRequestKind {
+  VACATION
+  DOCUMENT
+}
+
+enum HrRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum HrRequestPriority {
+  NORMAL
+  URGENT
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum AiSafetyStatus {
+  ALLOWED
+  BLOCKED
+  ERROR
+}
+
+enum DocumentVisibility {
+  PUBLIC
+  ROLE_RESTRICTED
+  EMPLOYEE_PRIVATE
+}
+
+enum AiActionType {
+  CREATE_LEAVE_REQUEST
+  CREATE_DOCUMENT_REQUEST
+  REVIEW_HR_REQUEST
+  COMPLETE_ONBOARDING_STEP
+}
+
+enum AiActionStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+  FAILED
+}
+
+enum NotificationType {
+  REQUEST
+  DOCUMENT
+  ONBOARDING
+  ALERT
+  SYSTEM
+}
+
+enum HrContactStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+model User {
+  id           String          @id @default(cuid())
+  email        String          @unique
+  passwordHash String
+  fullName     String
+  locale       String          @default("fr-FR")
+  settings     Json            @default("{}")
+  accountStatus AccountStatus  @default(ACTIVE)
+  onboardingState OnboardingState @default(OFF)
+  lastLoginAt  DateTime?
+  createdAt    DateTime        @default(now())
+  roles        UserRole[]
+  employee     Employee?
+  auditLogs    AuditLog[]
+  imports      DataImport[]    @relation("ImportOwner")
+  generated    GeneratedDocument[] @relation("DocumentGenerator")
+  uploadedDocs HrDocument[]    @relation("DocumentUploader")
+  documentTemplates DocumentTemplate[] @relation("TemplateUploader")
+  alerts       SecurityAlert[]
+  reviewedRequests HrRequest[] @relation("RequestReviewer")
+  aiConversations AiConversation[]
+  aiMessages    AiMessage[]
+  aiActionDrafts AiActionDraft[]
+  notifications Notification[]
+  contactRequests HrContactRequest[]
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  description String
+  roles       RolePermission[]
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model Department {
+  id        String      @id @default(cuid())
+  name      String
+  managerId String?
+  manager   Employee?   @relation("DepartmentManager", fields: [managerId], references: [id])
+  employees Employee[]   @relation("DepartmentEmployees")
+  kpis      KpiSnapshot[]
+}
+
+model JobPosition {
+  id          String     @id @default(cuid())
+  title       String
+  level       String
+  description String
+  employees   Employee[]
+}
+
+model Employee {
+  id             String              @id @default(cuid())
+  userId         String?             @unique
+  departmentId   String?
+  positionId     String?
+  managerId      String?
+  employeeNumber String              @unique
+  firstName      String
+  lastName       String
+  email          String              @unique
+  phone          String?
+  location       String?
+  address        String?
+  skills         String[]            @default([])
+  presenceScore  Int                 @default(92)
+  performanceScore Int               @default(80)
+  vacationBalanceDays Int            @default(12)
+  rttBalanceDays      Int            @default(10)
+  salary         Decimal             @db.Decimal(12, 2)
+  hireDate       DateTime
+  status         EmployeeStatus      @default(ACTIVE)
+  engagementScore Int                @default(72)
+  user           User?               @relation(fields: [userId], references: [id])
+  department     Department?         @relation("DepartmentEmployees", fields: [departmentId], references: [id])
+  position       JobPosition?        @relation(fields: [positionId], references: [id])
+  manager        Employee?           @relation("EmployeeManager", fields: [managerId], references: [id])
+  reports        Employee[]          @relation("EmployeeManager")
+  managedDepartments Department[]    @relation("DepartmentManager")
+  absences       Absence[]
+  requests       HrRequest[]
+  generatedDocs  GeneratedDocument[] @relation("GeneratedFor")
+  hrDocuments    HrDocument[]
+  workflowTasks  WorkflowTask[]      @relation("WorkflowEmployee")
+  assignedTasks  WorkflowTask[]      @relation("WorkflowAssignee")
+  riskAlerts     EmployeeRiskAlert[]
+}
+
+model DocumentTemplate {
+  id           String         @id @default(cuid())
+  uploadedBy   String
+  title        String
+  documentType String
+  category     String
+  description  String?
+  filePath     String
+  sizeBytes    Int            @default(0)
+  fileType     String         @default("DOCX")
+  downloads    Int            @default(0)
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  uploader     User           @relation("TemplateUploader", fields: [uploadedBy], references: [id])
+  requests     HrRequest[]
+}
+
+model Absence {
+  id           String        @id @default(cuid())
+  requestId    String?       @unique
+  employeeId   String
+  absenceType  String
+  startDate    DateTime
+  endDate      DateTime
+  durationDays Decimal       @db.Decimal(5, 2)
+  status       AbsenceStatus @default(PENDING)
+  employee     Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  request      HrRequest?    @relation(fields: [requestId], references: [id], onDelete: SetNull)
+}
+
+model HrRequest {
+  id          String            @id @default(cuid())
+  employeeId  String
+  templateId   String?
+  kind        HrRequestKind
+  requestType String
+  detail      String
+  startDate   DateTime?
+  endDate     DateTime?
+  durationDays Decimal?        @db.Decimal(5, 2)
+  priority    HrRequestPriority @default(NORMAL)
+  status      HrRequestStatus   @default(PENDING)
+  note        String?
+  comment     String?
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  createdAt   DateTime         @default(now())
+  attachmentPath String?
+  attachmentName String?
+  attachmentType String?
+  attachmentSize Int?
+  employee    Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  template    DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  reviewer    User?            @relation("RequestReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+  absence     Absence?
+}
+
+model GeneratedDocument {
+  id           String         @id @default(cuid())
+  employeeId   String
+  generatedBy  String
+  validatedBy  String?
+  documentType String
+  filePath     String
+  sizeBytes    Int             @default(0)
+  fileType     String          @default("TXT")
+  downloads    Int             @default(0)
+  isPublic     Boolean         @default(false)
+  status       DocumentStatus @default(DRAFT)
+  generatedAt  DateTime       @default(now())
+  employee     Employee       @relation("GeneratedFor", fields: [employeeId], references: [id], onDelete: Cascade)
+  generator    User           @relation("DocumentGenerator", fields: [generatedBy], references: [id])
+}
+
+model HrDocument {
+  id           String         @id @default(cuid())
+  employeeId   String?
+  uploadedBy   String
+  title        String
+  documentType String
+  category     String
+  filePath     String
+  sizeBytes    Int             @default(0)
+  fileType     String          @default("PDF")
+  downloads    Int             @default(0)
+  isPublic     Boolean         @default(false)
+  visibility   DocumentVisibility @default(ROLE_RESTRICTED)
+  allowedRoles String[]        @default(["ADMIN", "HR"])
+  status       DocumentStatus @default(PENDING_REVIEW)
+  createdAt    DateTime       @default(now())
+  employee     Employee?      @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  uploader     User           @relation("DocumentUploader", fields: [uploadedBy], references: [id])
+  chunks       DocumentChunk[]
+}
+
+model DocumentChunk {
+  id         String     @id @default(cuid())
+  documentId String
+  chunkText  String
+  embeddingRef String?
+  chunkOrder Int        @default(0)
+  sourcePage Int?
+  createdAt  DateTime   @default(now())
+  document   HrDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
+
+model WorkflowTask {
+  id           String       @id @default(cuid())
+  employeeId   String
+  assignedTo   String?
+  workflowType WorkflowType
+  phase        String          @default("General")
+  stepOrder    Int             @default(0)
+  title        String
+  description  String
+  dueDate      DateTime
+  completedAt  DateTime?
+  completionNote String?
+  locked       Boolean         @default(false)
+  status       TaskStatus   @default(TODO)
+  employee     Employee     @relation("WorkflowEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  assignee     Employee?    @relation("WorkflowAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+}
+
+model EmployeeRiskAlert {
+  id             String    @id @default(cuid())
+  employeeId     String
+  level          RiskLevel
+  title          String
+  detail         String
+  recommendation String
+  factors        String[]  @default([])
+  aiScore        Int
+  createdAt      DateTime  @default(now())
+  resolvedAt     DateTime?
+  followUpNote   String?
+  followUpAt     DateTime?
+  employee       Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+}
+
+model DataImport {
+  id          String       @id @default(cuid())
+  importedBy  String
+  importType  String
+  fileName    String
+  status      ImportStatus @default(PENDING)
+  totalRows   Int          @default(0)
+  errorRows   Int          @default(0)
+  importedAt  DateTime     @default(now())
+  owner       User         @relation("ImportOwner", fields: [importedBy], references: [id])
+}
+
+model KpiSnapshot {
+  id           String     @id @default(cuid())
+  departmentId String?
+  kpiName      String
+  kpiValue     Decimal    @db.Decimal(12, 2)
+  periodStart  DateTime
+  periodEnd    DateTime
+  calculatedAt DateTime   @default(now())
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  resourceType String
+  resourceId String?
+  status     String
+  metadata   Json       @default("{}")
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model SecurityAlert {
+  id        String        @id @default(cuid())
+  userId    String?
+  messageId String?
+  alertType String
+  title     String?
+  message   String?
+  targetId  String?
+  severity  AlertSeverity @default(MEDIUM)
+  status    AlertStatus   @default(OPEN)
+  createdAt DateTime      @default(now())
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model AiConversation {
+  id        String      @id @default(cuid())
+  userId    String
+  title     String
+  roleScope String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  AiMessage[]
+  actionDrafts AiActionDraft[]
+}
+
+model AiMessage {
+  id             String          @id @default(cuid())
+  conversationId String
+  userId         String?
+  role           AiMessageRole
+  content        String
+  model          String?
+  safetyStatus   AiSafetyStatus  @default(ALLOWED)
+  latencyMs      Int?
+  promptTokens   Int?
+  completionTokens Int?
+  totalTokens    Int?
+  sources        Json?
+  createdAt      DateTime        @default(now())
+  conversation   AiConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model AiActionDraft {
+  id             String          @id @default(cuid())
+  conversationId String
+  createdBy      String
+  actionType     AiActionType
+  payload        Json
+  status         AiActionStatus  @default(PENDING)
+  expiresAt      DateTime
+  executedAt     DateTime?
+  result         Json?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  conversation   AiConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  creator        User            @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([createdBy, status])
+  @@index([expiresAt])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType @default(SYSTEM)
+  title     String
+  message   String
+  resourceType String?
+  resourceId String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model HrContactRequest {
+  id        String          @id @default(cuid())
+  userId    String
+  name      String
+  email     String
+  phone     String?
+  message   String
+  status    HrContactStatus @default(OPEN)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
