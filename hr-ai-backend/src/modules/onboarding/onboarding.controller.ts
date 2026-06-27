@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CompleteOnboardingStepDto } from './dto/complete-onboarding-step.dto';
+import { ActivateWorkflowDto } from './dto/activate-workflow.dto';
 import { GenerateOnboardingPlanDto } from './dto/generate-onboarding-plan.dto';
 import { OnboardingService } from './onboarding.service';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -22,22 +23,31 @@ export class OnboardingController {
     return this.onboardingService.findMine(user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.HR)
+  @Post('activate')
+  activate(@Body() dto: ActivateWorkflowDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.onboardingService.activate(dto, user);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR)
   @Post('generate')
-  generate(@Body() dto: GenerateOnboardingPlanDto) {
-    return this.onboardingService.generate(dto);
+  generate(@Body() dto: GenerateOnboardingPlanDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.onboardingService.generate(dto, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER)
   @Get()
-  findAll() {
-    return this.onboardingService.findAll();
+  findAll(@Query('workflowType') workflowType?: 'ONBOARDING' | 'OFFBOARDING') {
+    return this.onboardingService.findAll(workflowType);
   }
 
   @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER)
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.onboardingService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @Query('workflowType') workflowType?: 'ONBOARDING' | 'OFFBOARDING',
+  ) {
+    return this.onboardingService.findOne(id, workflowType);
   }
 
   @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.COLLABORATOR)

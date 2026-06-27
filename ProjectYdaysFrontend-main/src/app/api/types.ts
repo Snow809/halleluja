@@ -100,6 +100,7 @@ export interface DocumentTemplate {
 
 export interface WorkflowTask {
   id: string;
+  workflowType?: "ONBOARDING" | "OFFBOARDING";
   phase: string;
   stepOrder: number;
   title: string;
@@ -109,10 +110,13 @@ export interface WorkflowTask {
   completionNote?: string;
   locked: boolean;
   status: string;
+  assignedTo?: string;
+  assignee?: { id: string; firstName: string; lastName: string; email?: string };
 }
 
 export interface OnboardingPlan {
   id: string;
+  workflowType: "ONBOARDING" | "OFFBOARDING";
   employee: Employee;
   steps: WorkflowTask[];
   progress: number;

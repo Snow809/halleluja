@@ -34,6 +34,14 @@ export interface DetectedChatTool {
   searchQuery?: string;
 }
 
+export interface GeneratedWorkflowTask {
+  phase: string;
+  title: string;
+  description: string;
+  assignee: 'EMPLOYEE' | 'MANAGER' | 'HR';
+  dueOffsetDays: number;
+}
+
 @Injectable()
 export class LlmService {
   private readonly logger = new Logger(LlmService.name);
@@ -136,6 +144,50 @@ export class LlmService {
       { role: 'user', content: prompt },
     ]);
     return { ...completion, provider: 'opencode-go' };
+  }
+
+  async generateWorkflowTasks(input: {
+    workflowType: 'ONBOARDING' | 'OFFBOARDING';
+    employee: {
+      fullName: string;
+      email: string;
+      status: string;
+      hireDate?: string;
+      department?: string;
+      position?: string;
+      manager?: string;
+    };
+  }): Promise<GeneratedWorkflowTask[]> {
+    const completion = await this.complete(
+      [
+        {
+          role: 'system',
+          content: [
+            'You generate practical HR workflow tasks for an internal HR portal.',
+            'Return only valid JSON. No Markdown, no prose.',
+            'Generate between 3 and 12 tasks tailored to the employee context.',
+            'Use French task labels and descriptions.',
+            'Each task must include phase, title, description, assignee, and dueOffsetDays.',
+            'assignee must be exactly one of EMPLOYEE, MANAGER, HR.',
+            'dueOffsetDays is an integer number of days from the workflow start date.',
+            'For onboarding, include account/access setup, manager/team integration, role-specific training, and HR follow-up.',
+            'For offboarding, include knowledge transfer, access revocation, equipment/document return, final HR/admin checks, and manager handoff.',
+            'Return this JSON shape exactly: {"tasks":[{"phase":"string","title":"string","description":"string","assignee":"EMPLOYEE|MANAGER|HR","dueOffsetDays":0}]}',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(input),
+        },
+      ],
+      0.2,
+    );
+    const json = completion.content
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+    const parsed = JSON.parse(json) as { tasks?: GeneratedWorkflowTask[] };
+    return Array.isArray(parsed.tasks) ? parsed.tasks : [];
   }
 
   async answerGroundedQuestion(input: {
