@@ -190,7 +190,7 @@ export class ChatActionService {
           ? 'RTT'
           : sickness
             ? 'Congé maladie'
-            : 'Conges payes',
+            : 'Congés payés',
         startDate: detected.startDate,
         endDate: detected.endDate,
         durationDays,
@@ -348,5 +348,4 @@ export class ChatActionService {
   private normalize(value: string) {
     return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   }
-
 }

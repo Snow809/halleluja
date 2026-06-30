@@ -26,4 +26,16 @@ export class RagController {
   indexDocument(@Param('documentId') documentId: string) {
     return this.ragService.indexDocument(documentId);
   }
+
+  @Roles(UserRole.ADMIN, UserRole.HR)
+  @Post('index/:documentId')
+  indexDocumentAlias(@Param('documentId') documentId: string) {
+    return this.ragService.indexDocument(documentId);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR)
+  @Post('reindex')
+  reindex() {
+    return this.ragService.reindexApprovedDocuments();
+  }
 }

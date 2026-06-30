@@ -19,6 +19,10 @@ export class HrContextService {
 
   async build(question: string, user: AuthenticatedUser): Promise<HrContextResult> {
     const normalized = this.normalize(question);
+    if (this.looksLikeCompanyDocumentQuestion(normalized)) {
+      return { handled: false, refused: false };
+    }
+
     const topic = this.detectTopic(normalized);
     if (!topic) return { handled: false, refused: false };
 
@@ -130,49 +134,8 @@ export class HrContextService {
       };
     }
 
-    if (
-      topic === 'requests' &&
-      /\b(pending|attente|approval|approbation|valider|all|team|equipe|liste|toutes|tous)\b/.test(normalized)
-    ) {
-      const actor = await this.accessPolicy.getActor(user);
-      const where =
-        this.accessPolicy.isGlobalHr(user.role)
-          ? {}
-          : user.role === 'MANAGER' && actor
-            ? { employee: { managerId: actor.id } }
-            : actor
-              ? { employeeId: actor.id }
-              : { id: 'none' };
-      const requests = await this.prisma.hrRequest.findMany({
-        where: {
-          ...where,
-          ...(normalized.includes('pending') || normalized.includes('attente')
-            ? { status: 'PENDING' as const }
-            : {}),
-        },
-        include: {
-          employee: { select: { firstName: true, lastName: true, employeeNumber: true } },
-          template: { select: { title: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 50,
-      });
-      return {
-        handled: true,
-        refused: false,
-        context: JSON.stringify({
-          requests: requests.map((request) => ({
-            id: request.id,
-            employee: `${request.employee.firstName} ${request.employee.lastName}`,
-            employeeNumber: request.employee.employeeNumber,
-            kind: request.kind,
-            type: request.requestType,
-            status: request.status,
-            createdAt: request.createdAt,
-            template: request.template?.title,
-          })),
-        }),
-      };
+    if (topic === 'requests') {
+      return this.buildRequestContext(normalized, user);
     }
 
     if (
@@ -208,11 +171,9 @@ export class HrContextService {
         ? 'salary'
         : topic === 'documents'
           ? 'documents'
-          : topic === 'requests'
-            ? 'requests'
-            : topic === 'performance'
-              ? 'wellbeing'
-              : 'profile';
+          : topic === 'performance'
+            ? 'wellbeing'
+            : 'profile';
     const allowed = await this.accessPolicy.canAccessEmployee(user, target.id, policyTopic);
     if (!allowed) {
       return {
@@ -254,9 +215,6 @@ export class HrContextService {
           recentAbsences: employee.absences,
           recentLeaveRequests: employee.requests.filter((request) => request.kind === 'VACATION'),
         };
-        break;
-      case 'requests':
-        data = { employee: name, requests: employee.requests };
         break;
       case 'documents':
         data = {
@@ -358,12 +316,137 @@ export class HrContextService {
     };
   }
 
-  private async resolveTargetEmployee(normalizedQuestion: string, user: AuthenticatedUser) {
+  private async buildRequestContext(normalizedQuestion: string, user: AuthenticatedUser): Promise<HrContextResult> {
     const actor = await this.accessPolicy.getActor(user);
-    if (/\b(my|me|mine|mon|ma|mes|moi|je|انا|لي)\b/.test(normalizedQuestion)) {
-      return actor;
+    const asksPendingOnly = /\b(pending|attente|en attente|approval|approbation|valider|valide|refuser|refuse|review|approve)\b/.test(normalizedQuestion);
+    const asksReviewQueue = /\b(valider|valide|refuser|refuse|review|approve|approval|approbation|a traiter|traiter)\b/.test(normalizedQuestion);
+    const asksOwnScope = /\b(my|mine|me|for me|own|mon|ma|mes|moi|pour moi|a moi|je)\b/.test(normalizedQuestion);
+    const statusFilter = asksPendingOnly ? { status: 'PENDING' as const } : {};
+
+    if (!actor && !this.accessPolicy.isGlobalHr(user.role)) {
+      return {
+        handled: true,
+        refused: true,
+        reason: this.localizedReason(
+          normalizedQuestion,
+          'I could not identify your employee profile to look up your requests.',
+          'Je ne peux pas identifier votre profil employé pour consulter vos demandes.',
+        ),
+      };
     }
 
+    const ownRequests = actor
+      ? await this.prisma.hrRequest.findMany({
+          where: { employeeId: actor.id, ...statusFilter },
+          include: {
+            employee: { select: { firstName: true, lastName: true, employeeNumber: true } },
+            template: { select: { title: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        })
+      : [];
+
+    const reviewWhere =
+      this.accessPolicy.isGlobalHr(user.role)
+        ? {}
+        : user.role === 'MANAGER' && actor
+          ? { employee: { managerId: actor.id } }
+          : { id: 'none' };
+
+    const reviewableRequests =
+      this.accessPolicy.isGlobalHr(user.role) || user.role === 'MANAGER'
+        ? await this.prisma.hrRequest.findMany({
+            where: { ...reviewWhere, ...statusFilter },
+            include: {
+              employee: { select: { firstName: true, lastName: true, employeeNumber: true } },
+              template: { select: { title: true } },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 50,
+          })
+        : [];
+
+    const primaryScope =
+      asksReviewQueue && (this.accessPolicy.isGlobalHr(user.role) || user.role === 'MANAGER')
+        ? 'review_queue'
+        : asksOwnScope
+          ? 'own_requests'
+          : this.accessPolicy.isGlobalHr(user.role) || user.role === 'MANAGER'
+            ? 'review_queue'
+            : 'own_requests';
+
+    return {
+      handled: true,
+      refused: false,
+      context: JSON.stringify(
+        {
+          requestQuestionScope: primaryScope,
+          statusFilter: asksPendingOnly ? 'PENDING' : 'ALL_RECENT',
+          authenticatedUser: {
+            role: user.role,
+            employee: actor ? `${actor.firstName} ${actor.lastName}` : null,
+            employeeNumber: actor?.employeeNumber ?? null,
+          },
+          ownRequests: {
+            count: ownRequests.length,
+            pendingCount: ownRequests.filter((request) => request.status === 'PENDING').length,
+            items: ownRequests.map((request) => this.formatRequest(request)),
+          },
+          reviewQueue:
+            this.accessPolicy.isGlobalHr(user.role) || user.role === 'MANAGER'
+              ? {
+                  scope: this.accessPolicy.isGlobalHr(user.role)
+                    ? 'all employees'
+                    : 'direct reports',
+                  count: reviewableRequests.length,
+                  pendingCount: reviewableRequests.filter((request) => request.status === 'PENDING').length,
+                  items: reviewableRequests.map((request) => this.formatRequest(request)),
+                }
+              : null,
+          instruction:
+            'Answer from these live HR request counts only. If the user asks for a number, give the relevant count first. Use a compact Markdown table when listing requests.',
+        },
+        null,
+        2,
+      ),
+    };
+  }
+
+  private formatRequest(request: {
+    id: string;
+    kind: string;
+    requestType: string;
+    status: string;
+    createdAt: Date;
+    startDate?: Date | null;
+    endDate?: Date | null;
+    durationDays?: unknown;
+    employee: { firstName: string; lastName: string; employeeNumber: string };
+    template?: { title: string } | null;
+  }) {
+    return {
+      employee: `${request.employee.firstName} ${request.employee.lastName}`,
+      employeeNumber: request.employee.employeeNumber,
+      kind: request.kind,
+      type: request.requestType,
+      status: request.status,
+      createdAt: request.createdAt,
+      startDate: request.startDate ?? null,
+      endDate: request.endDate ?? null,
+      durationDays: request.durationDays ? Number(request.durationDays) : null,
+      template: request.template?.title ?? null,
+    };
+  }
+
+  private localizedReason(normalizedQuestion: string, en: string, fr: string) {
+    return /\b(le|la|les|des|mon|ma|mes|moi|je|tu|vous|combien|demande|demandes|conge)\b/.test(normalizedQuestion)
+      ? fr
+      : en;
+  }
+
+  private async resolveTargetEmployee(normalizedQuestion: string, user: AuthenticatedUser) {
+    const actor = await this.accessPolicy.getActor(user);
     const employees = await this.prisma.employee.findMany({
       select: { id: true, firstName: true, lastName: true, email: true },
     });
@@ -383,6 +466,9 @@ export class HrContextService {
     );
     if (partialMatches.length === 1) return partialMatches[0];
     if (partialMatches.length > 1) return null;
+    if (/\b(my|mine|mon|ma|mes|moi|je)\b/.test(normalizedQuestion)) {
+      return actor;
+    }
     if (user.role === 'COLLABORATOR') return actor;
     return actor;
   }
@@ -393,12 +479,22 @@ export class HrContextService {
     if (/\b(headcount|effectif|nombre d.employ|workforce)\b/.test(question)) return 'headcount';
     if (/\b(absenteeism|absenteisme|engagement global|presence globale|wellbeing|bien.etre)\b/.test(question)) return 'wellbeing-aggregate';
     if (/\b(vacation|leave|conge|conges|rtt|absence|absences|solde)\b/.test(question)) return 'leave';
-    if (/\b(request|requests|demande|demandes|approval|approbation|pending|attente)\b/.test(question)) return 'requests';
+    if (/\b(request|requests|demande|demandes|approval|approbation|pending|attente|valider|refuser|approve|review)\b/.test(question)) return 'requests';
     if (/\b(document|documents|attestation|bulletin|certificate|certificat)\b/.test(question)) return 'documents';
     if (/\b(onboarding|integration|step|etape|task|tache)\b/.test(question)) return 'onboarding';
     if (/\b(performance|engagement|presence|score|rendement)\b/.test(question)) return 'performance';
     if (/\b(profile|profil|department|departement|position|poste|manager|skills|competences|employee|employe)\b/.test(question)) return 'profile';
     return null;
+  }
+
+  private looksLikeCompanyDocumentQuestion(question: string) {
+    const documentTerms =
+      /\b(policy|policies|procedure|procedures|handbook|regulation|rules|rulebook|code of conduct|conduct code|conduct|reglement|interieur|charte|conduite|guide|manuel|politique|procedures|procedure interne|document public|public document|company document|document entreprise|document societe)\b/;
+    if (!documentTerms.test(question)) return false;
+
+    const explicitEmployeeRecordTerms =
+      /\b(salary|salaries|salaire|salaires|paie|payroll|bulletin|contrat|contract|medical|medicale|medecin|sick note|certificat medical|address|adresse|phone|telephone|email|hire date|date d embauche|dossier personnel|employee record|private document|document prive)\b/;
+    return !explicitEmployeeRecordTerms.test(question);
   }
 
   private async findMentionedDepartment(normalizedQuestion: string) {

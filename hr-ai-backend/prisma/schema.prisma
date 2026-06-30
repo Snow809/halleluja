@@ -355,6 +355,8 @@ model DocumentChunk {
   documentId String
   chunkText  String
   embeddingRef String?
+  embedding  Unsupported("vector(384)")?
+  embeddingModel String?
   chunkOrder Int        @default(0)
   sourcePage Int?
   createdAt  DateTime   @default(now())

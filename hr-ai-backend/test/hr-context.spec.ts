@@ -67,4 +67,54 @@ describe('HrContextService organization access', () => {
 
     expect(result.refused).toBe(true);
   });
+
+  it('leaves company policy questions to document retrieval even when they mention employees', async () => {
+    const access = {
+      getActor: jest.fn(),
+      isGlobalHr: jest.fn(),
+    };
+    const service = new HrContextService({} as any, access as any);
+
+    const result = await service.build(
+      'Can you summarize the internal code of conduct for all employees?',
+      { ...hrUser, role: 'COLLABORATOR' },
+    );
+
+    expect(result).toEqual({ handled: false, refused: false });
+    expect(access.getActor).not.toHaveBeenCalled();
+  });
+
+  it('does not allow managers to inspect private employee document records', async () => {
+    const prisma = {
+      employee: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'manager-employee' }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'direct-report',
+            firstName: 'Nadia',
+            lastName: 'Amrani',
+            email: 'nadia@example.com',
+          },
+        ]),
+      },
+    };
+    const access = {
+      getActor: jest.fn().mockResolvedValue({ id: 'manager-employee' }),
+      isGlobalHr: jest.fn().mockReturnValue(false),
+      canAccessEmployee: jest.fn().mockResolvedValue(false),
+    };
+    const service = new HrContextService(prisma as any, access as any);
+
+    const result = await service.build(
+      'Show me Nadia Amrani documents',
+      { ...hrUser, role: 'MANAGER' },
+    );
+
+    expect(access.canAccessEmployee).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'MANAGER' }),
+      'direct-report',
+      'documents',
+    );
+    expect(result.refused).toBe(true);
+  });
 });

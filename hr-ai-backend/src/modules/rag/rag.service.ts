@@ -12,6 +12,7 @@ import { RagQueryDto } from './dto/rag-query.dto';
 import { RetrieverService } from './retriever.service';
 import { HrContextService } from './hr-context.service';
 import { S3Service } from '../../services/storage/s3.service';
+import { EmbeddingsService } from '../../services/embeddings/embeddings.service';
 
 @Injectable()
 export class RagService {
@@ -23,12 +24,14 @@ export class RagService {
     private readonly llmService: LlmService,
     private readonly auditService: AuditService,
     private readonly s3: S3Service,
+    private readonly embeddings: EmbeddingsService,
   ) {}
 
   async answerWithSources(
     dto: RagQueryDto,
     user: AuthenticatedUser,
     retrievalQuestion = dto.question,
+    language?: string,
   ) {
     if (this.looksLikePromptInjection(dto.question)) {
       await this.auditService.logSecurityBlock(user.userId, {
@@ -58,7 +61,7 @@ export class RagService {
 
     const chunks = await this.retrieverService.retrieveRelevantChunks(retrievalQuestion, user);
     if (!hrContext.context && chunks.length === 0) {
-      return this.rejectIfNoSource(dto.question, user);
+      return this.rejectIfNoSource(dto.question, user, language);
     }
 
     const documentContext = chunks
@@ -78,7 +81,7 @@ export class RagService {
       question: dto.question,
       context,
       role: user.role,
-      languageInstruction: this.languageInstruction(dto.question),
+      languageInstruction: this.languageInstruction(dto.question, language),
     });
     return {
       answer: completion.content,
@@ -98,14 +101,13 @@ export class RagService {
     };
   }
 
-  async rejectIfNoSource(question: string, user: AuthenticatedUser) {
+  async rejectIfNoSource(question: string, user: AuthenticatedUser, language?: string) {
     await this.auditService.logAIRefusal(user.userId, {
       question,
       reason: 'no-authorized-source',
     });
     return {
-      answer:
-        'I do not have enough authorized HR data or approved documents to answer that question.',
+      answer: this.noSourceAnswer(question, language),
       refused: true,
       sources: [],
       safetyStatus: 'BLOCKED' as const,
@@ -126,23 +128,95 @@ export class RagService {
       throw new BadRequestException('The document contains no indexable text');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.documentChunk.deleteMany({ where: { documentId } }),
-      ...chunks.map((chunkText, chunkOrder) =>
+    await this.prisma.documentChunk.deleteMany({ where: { documentId } });
+
+    const createdChunks = await this.prisma.$transaction(
+      chunks.map((chunkText, chunkOrder) =>
         this.prisma.documentChunk.create({
-          data: { documentId, chunkText, chunkOrder },
+          data: {
+            documentId,
+            chunkText,
+            chunkOrder,
+          },
         }),
       ),
-    ]);
-    return { documentId, status: 'indexed', chunksCreated: chunks.length };
+    );
+
+    try {
+      for (const chunk of createdChunks) {
+        const embedding = await this.embeddings.generateEmbedding(
+          `${document.title}\n${document.category}\n\n${chunk.chunkText}`,
+          'RETRIEVAL_DOCUMENT',
+        );
+        await this.prisma.$executeRaw`
+          UPDATE "DocumentChunk"
+          SET
+            "embedding" = ${this.vectorLiteral(embedding.embedding)}::vector,
+            "embeddingRef" = ${embedding.model},
+            "embeddingModel" = ${embedding.model}
+          WHERE "id" = ${chunk.id}
+        `;
+      }
+    } catch (error) {
+      await this.prisma.documentChunk.deleteMany({ where: { documentId } });
+      throw error;
+    }
+
+    return { documentId, status: 'indexed', chunksCreated: createdChunks.length };
   }
 
   async removeDocumentIndex(documentId: string) {
     return this.prisma.documentChunk.deleteMany({ where: { documentId } });
   }
 
-  query(dto: RagQueryDto, user: AuthenticatedUser, retrievalQuestion = dto.question) {
-    return this.answerWithSources(dto, user, retrievalQuestion);
+  async reindexApprovedDocuments() {
+    const documents = await this.prisma.hrDocument.findMany({
+      where: { status: 'APPROVED' },
+      select: { id: true, title: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const results: Array<{
+      documentId: string;
+      title: string;
+      status: 'indexed' | 'failed';
+      chunksCreated?: number;
+      error?: string;
+    }> = [];
+
+    for (const document of documents) {
+      try {
+        const result = await this.indexDocument(document.id);
+        results.push({
+          documentId: document.id,
+          title: document.title,
+          status: 'indexed',
+          chunksCreated: result.chunksCreated,
+        });
+      } catch (error) {
+        results.push({
+          documentId: document.id,
+          title: document.title,
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Unknown indexing error',
+        });
+      }
+    }
+
+    return {
+      total: documents.length,
+      indexed: results.filter((result) => result.status === 'indexed').length,
+      failed: results.filter((result) => result.status === 'failed').length,
+      results,
+    };
+  }
+
+  query(
+    dto: RagQueryDto,
+    user: AuthenticatedUser,
+    retrievalQuestion = dto.question,
+    language?: string,
+  ) {
+    return this.answerWithSources(dto, user, retrievalQuestion, language);
   }
 
   hasAuthorizedDocumentReference(question: string, user: AuthenticatedUser) {
@@ -186,11 +260,38 @@ export class RagService {
     ].some((pattern) => normalized.includes(pattern));
   }
 
-  private languageInstruction(question: string) {
+  private languageInstruction(question: string, language?: string) {
+    if (language === 'ar') return 'Reply in Arabic.';
+    if (language === 'fr') return 'Reply in French.';
+    if (language === 'en') return 'Reply in English.';
     if (/[\u0600-\u06ff]/.test(question)) return 'Reply in Arabic.';
     if (/\b(le|la|les|des|mon|ma|mes|quel|quelle|combien|salaire|conge)\b/i.test(question)) {
       return 'Reply in French.';
     }
     return 'Reply in English.';
+  }
+
+  private noSourceAnswer(question: string, language?: string) {
+    const resolvedLanguage =
+      language ??
+      (/[\u0600-\u06ff]/.test(question)
+        ? 'ar'
+        : /\b(le|la|les|des|mon|ma|mes|quel|quelle|combien|salaire|conge|chez nous|resume|peux|veux)\b/i.test(question)
+          ? 'fr'
+          : 'en');
+    if (resolvedLanguage === 'ar') {
+      return 'لا أملك معلومات معتمدة أو مفهرسة كافية للإجابة على هذا السؤال.';
+    }
+    if (resolvedLanguage === 'fr') {
+      return 'Je n’ai pas assez d’informations approuvées ou indexées pour répondre à cette question.';
+    }
+    return 'I do not have enough approved or indexed authorized information to answer that question.';
+  }
+
+  private vectorLiteral(values: number[]) {
+    if (!Array.isArray(values) || values.length === 0) {
+      throw new BadRequestException('Embedding provider returned no vector values');
+    }
+    return `[${values.map((value) => Number(value).toFixed(8)).join(',')}]`;
   }
 }

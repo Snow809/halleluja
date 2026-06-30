@@ -1,12 +1,13 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { Response } from 'express';
 import { PrismaService } from '../../database/prisma.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { AuditService } from '../audit/audit.service';
 import { RagService } from '../rag/rag.service';
 import { AskQuestionDto } from './dto/ask-question.dto';
 import { ChatActionService } from './chat-action.service';
-import { LlmMessage, LlmService } from '../../services/llm/llm.service';
+import { DetectedChatIntent, LlmMessage, LlmService } from '../../services/llm/llm.service';
 
 @Injectable()
 export class ChatService {
@@ -30,105 +31,87 @@ export class ChatService {
       },
     });
 
-    const proposedAction = await this.actionService.propose(
-      dto.question,
-      conversation.id,
-      user,
+    if (this.isTinyGreeting(dto.question)) {
+      return this.answerConversation(conversation.id, dto.question, history, user, {
+        intent: 'GENERAL_CHAT',
+        language: this.llmService.detectLanguage(dto.question),
+        resolvedQuestion: dto.question,
+      });
+    }
+
+    const documents = await this.ragService.getAuthorizedDocumentCatalog(user);
+    const intent = await this.llmService.detectChatIntent({
+      question: dto.question,
       history,
-    );
-    if (proposedAction) {
-      const answer = this.actionProposalAnswer(dto.question, proposedAction.summary);
-      await this.prisma.aiMessage.create({
-        data: {
-          conversationId: conversation.id,
-          role: 'ASSISTANT',
-          content: answer,
-          safetyStatus: 'ALLOWED',
-        },
-      });
-      return {
-        conversationId: conversation.id,
-        answer,
-        refused: false,
-        sources: [],
-        proposedAction,
-      };
-    }
+      documents,
+      role: user.role,
+    });
+    const resolvedQuestion = intent.resolvedQuestion?.trim() || dto.question;
 
-    let shouldUseSecureHrMode = this.shouldUseSecureHrMode(dto.question, history);
-    let retrievalQuestion = dto.question;
-    if (!shouldUseSecureHrMode) {
-      const documents = await this.ragService.getAuthorizedDocumentCatalog(user);
-      const detectedTool = await this.llmService.detectChatTool({
-        question: dto.question,
+    if (
+      intent.intent === 'PROPOSE_LEAVE_REQUEST' ||
+      intent.intent === 'PROPOSE_DOCUMENT_REQUEST'
+    ) {
+      const proposedAction = await this.actionService.propose(
+        resolvedQuestion,
+        conversation.id,
+        user,
         history,
-        documents,
-      });
-      shouldUseSecureHrMode = detectedTool.tool === 'SEARCH_AUTHORIZED_HR';
-      retrievalQuestion = detectedTool.searchQuery?.trim() || dto.question;
-
-      // Safe fallback if the provider returns malformed routing JSON.
-      if (
-        !shouldUseSecureHrMode &&
-        await this.ragService.hasAuthorizedDocumentReference(dto.question, user)
-      ) {
-        shouldUseSecureHrMode = true;
-      }
-    }
-
-    if (!shouldUseSecureHrMode) {
-      try {
-        const completion = await this.llmService.answerConversation({
-          role: user.role,
-          userName: user.fullName,
-          messages: [
-            ...history,
-            { role: 'user', content: dto.question },
-          ],
-        });
+      );
+      if (proposedAction) {
+        const answer = this.actionProposalAnswer(intent.language, proposedAction.summary);
         await this.prisma.aiMessage.create({
           data: {
             conversationId: conversation.id,
             role: 'ASSISTANT',
-            content: completion.content,
-            model: completion.model,
+            content: answer,
             safetyStatus: 'ALLOWED',
-            latencyMs: completion.latencyMs,
-            promptTokens: completion.promptTokens,
-            completionTokens: completion.completionTokens,
-            totalTokens: completion.totalTokens,
-            sources: [],
           },
         });
+        await this.touchConversation(conversation.id);
         return {
           conversationId: conversation.id,
-          answer: completion.content,
+          answer,
           refused: false,
-          safetyStatus: 'ALLOWED' as const,
           sources: [],
-          model: completion.model,
-          latencyMs: completion.latencyMs,
-          promptTokens: completion.promptTokens,
-          completionTokens: completion.completionTokens,
-          totalTokens: completion.totalTokens,
+          proposedAction,
         };
-      } catch (error) {
-        await this.recordProviderError(conversation.id);
-        throw error;
       }
+      return this.storeAssistantText(
+        conversation.id,
+        this.missingActionDetailsAnswer(intent),
+        'ALLOWED',
+      ).then((answer) => ({
+        conversationId: conversation.id,
+        answer,
+        refused: false,
+        safetyStatus: 'ALLOWED' as const,
+        sources: [],
+      }));
     }
+
+    if (intent.intent === 'GENERAL_CHAT') {
+      return this.answerConversation(conversation.id, resolvedQuestion, history, user, intent);
+    }
+
+    const retrievalQuestion =
+      intent.intent === 'DOCUMENT_RAG'
+        ? intent.searchQuery?.trim() || resolvedQuestion
+        : resolvedQuestion;
 
     let ragResponse: Awaited<ReturnType<RagService['query']>>;
     try {
       ragResponse = await this.ragService.query(
-        { question: dto.question },
+        { question: resolvedQuestion },
         user,
         retrievalQuestion,
+        intent.language,
       );
     } catch (error) {
       await this.recordProviderError(conversation.id);
       throw error;
     }
+
     if (ragResponse.safetyStatus === 'BLOCKED') {
       await this.prisma.aiMessage.update({
         where: { id: userMessage.id },
@@ -149,14 +132,37 @@ export class ChatService {
         sources: ragResponse.sources as unknown as Prisma.InputJsonValue,
       },
     });
+    await this.touchConversation(conversation.id);
 
     return { conversationId: conversation.id, ...ragResponse };
+  }
+
+  async askStream(dto: AskQuestionDto, user: AuthenticatedUser, response: Response) {
+    response.setHeader('Content-Type', 'text/event-stream');
+    response.setHeader('Cache-Control', 'no-cache, no-transform');
+    response.setHeader('Connection', 'keep-alive');
+    response.flushHeaders?.();
+    this.writeSse(response, 'message_start', {});
+    try {
+      const result = await this.ask(dto, user);
+      for (const chunk of this.chunkForSse(result.answer ?? '')) {
+        this.writeSse(response, 'token', { content: chunk });
+      }
+      this.writeSse(response, 'done', result);
+    } catch (error) {
+      this.writeSse(response, 'error', {
+        message: error instanceof Error ? error.message : 'The assistant is unavailable.',
+      });
+    } finally {
+      response.end();
+    }
   }
 
   findConversations(user: AuthenticatedUser) {
     return this.prisma.aiConversation.findMany({
       where: { userId: user.userId },
       orderBy: { updatedAt: 'desc' },
+      take: 10,
       include: {
         _count: { select: { messages: true } },
       },
@@ -276,21 +282,99 @@ export class ChatService {
     return conversation;
   }
 
-  private actionProposalAnswer(question: string, summary: string) {
-    if (/[\u0600-\u06ff]/.test(question)) {
+  private actionProposalAnswer(language: string | undefined, summary: string) {
+    if (language === 'ar') {
       return `حضّرت هذا الإجراء: ${summary}. راجعه واضغط على قبول لتنفيذه.`;
     }
-    if (/\b(le|la|les|des|mon|ma|mes|demande|conge|document|valide)\b/i.test(question)) {
+    if (language === 'fr') {
       return `J’ai préparé cette action : ${summary}. Vérifiez-la puis cliquez sur Accepter pour l’exécuter.`;
     }
     return `I prepared this action: ${summary}. Review it and press Accept to execute it.`;
+  }
+
+  private missingActionDetailsAnswer(intent: DetectedChatIntent) {
+    if (intent.intent === 'PROPOSE_DOCUMENT_REQUEST') {
+      if (intent.language === 'fr') return 'Quel document souhaitez-vous demander ?';
+      if (intent.language === 'ar') return 'ما هو المستند الذي تريد طلبه؟';
+      return 'Which document would you like to request?';
+    }
+    if (intent.language === 'fr') return 'Pour préparer le congé, j’ai besoin des dates de début et de fin.';
+    if (intent.language === 'ar') return 'لتحضير طلب الإجازة، أحتاج إلى تاريخ البداية وتاريخ النهاية.';
+    return 'To prepare the leave request, I need the start and end dates.';
+  }
+
+  private async answerConversation(
+    conversationId: string,
+    question: string,
+    history: LlmMessage[],
+    user: AuthenticatedUser,
+    intent: DetectedChatIntent,
+  ) {
+    try {
+      const completion = await this.llmService.answerConversation({
+        role: user.role,
+        userName: user.fullName,
+        languageInstruction: this.llmService.languageInstruction(intent.language),
+        messages: [
+          ...history,
+          { role: 'user', content: question },
+        ],
+      });
+      await this.prisma.aiMessage.create({
+        data: {
+          conversationId,
+          role: 'ASSISTANT',
+          content: completion.content,
+          model: completion.model,
+          safetyStatus: 'ALLOWED',
+          latencyMs: completion.latencyMs,
+          promptTokens: completion.promptTokens,
+          completionTokens: completion.completionTokens,
+          totalTokens: completion.totalTokens,
+          sources: [],
+        },
+      });
+      await this.touchConversation(conversationId);
+      return {
+        conversationId,
+        answer: completion.content,
+        refused: false,
+        safetyStatus: 'ALLOWED' as const,
+        sources: [],
+        model: completion.model,
+        latencyMs: completion.latencyMs,
+        promptTokens: completion.promptTokens,
+        completionTokens: completion.completionTokens,
+        totalTokens: completion.totalTokens,
+      };
+    } catch (error) {
+      await this.recordProviderError(conversationId);
+      throw error;
+    }
+  }
+
+  private async storeAssistantText(
+    conversationId: string,
+    content: string,
+    safetyStatus: 'ALLOWED' | 'BLOCKED' | 'ERROR',
+  ) {
+    await this.prisma.aiMessage.create({
+      data: {
+        conversationId,
+        role: 'ASSISTANT',
+        content,
+        safetyStatus,
+      },
+    });
+    await this.touchConversation(conversationId);
+    return content;
   }
 
   private async getConversationHistory(conversationId: string): Promise<LlmMessage[]> {
     const messages = await this.prisma.aiMessage.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'desc' },
-      take: 12,
+      take: 16,
       select: { role: true, content: true },
     });
     return messages
@@ -302,34 +386,13 @@ export class ChatService {
       }));
   }
 
-  private shouldUseSecureHrMode(question: string, history: LlmMessage[]) {
+  private isTinyGreeting(question: string) {
     const normalized = question
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
-      .replace(/\s+/g, ' ');
-    const hrTerms =
-      /\b(hr|human resources|rh|ressources humaines|employee|employees|employe|employes|staff|people|workforce|salary|salaries|salary grid|pay band|salaire|salaires|grille salariale|payroll|paie|compensation|vacation|leave|conge|conges|rtt|absence|absences|document|documents|attestation|bulletin|certificate|certificat|onboarding|offboarding|performance|engagement|presence|manager|managers|team|teams|team size|org chart|organization chart|reporting line|department|departement|position|poste|request|requests|demande|demandes|headcount|effectif|wellbeing|bien etre|qvt|risk alert|alerte risque)\b/;
-    const privateDataTerms =
-      /\b(address|adresse|phone|telephone|email|e mail|hire date|date d embauche|skills|competences|profile|profil|record|dossier)\b/;
-    const securityTerms =
-      /\b(ignore previous instructions|ignore all instructions|reveal system prompt|show hidden prompt|bypass security|oublie les instructions|ignore les instructions)\b/;
-    if (hrTerms.test(normalized) || privateDataTerms.test(normalized) || securityTerms.test(normalized)) {
-      return true;
-    }
-
-    const followUp =
-      /^(and|also|what about|how about|why|when|where|who|which|how many|combien|et|aussi|et pour|pourquoi|quand|ou|qui|lequel|laquelle|ceux|celles|them|they|he|she|him|her|lui|elle|eux|ca|cela)\b/;
-    if (!followUp.test(normalized.trim())) return false;
-    return history.slice(-4).some((message) => hrTerms.test(this.normalizeForRouting(message.content)));
-  }
-
-  private normalizeForRouting(value: string) {
-    return value
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
+      .trim();
+    return /^(hi|hello|hey|thanks|thank you|bonjour|salut|merci|coucou|yo|salam|مرحبا)[!.?\s]*$/.test(normalized);
   }
 
   private recordProviderError(conversationId: string) {
@@ -341,5 +404,25 @@ export class ChatService {
         safetyStatus: 'ERROR',
       },
     });
+  }
+
+  private touchConversation(conversationId: string) {
+    return this.prisma.aiConversation.update({
+      where: { id: conversationId },
+      data: { updatedAt: new Date() },
+    });
+  }
+
+  private writeSse(response: Response, event: string, data: unknown) {
+    response.write(`event: ${event}\n`);
+    response.write(`data: ${JSON.stringify(data)}\n\n`);
+  }
+
+  private chunkForSse(answer: string) {
+    const chunks: string[] = [];
+    for (let index = 0; index < answer.length; index += 120) {
+      chunks.push(answer.slice(index, index + 120));
+    }
+    return chunks.length ? chunks : [''];
   }
 }

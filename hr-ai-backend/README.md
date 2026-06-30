@@ -12,9 +12,9 @@ It is not a full HRIS/SIRH. Payroll, leave approval workflows, career management
 - RBAC guards and decorators
 - class-validator / class-transformer
 - Multer local uploads
-- pgvector-ready document chunk structure
+- pgvector-backed semantic document retrieval
 - OpenCode Go chat completions
-- Role-scoped lexical RAG over PDF, DOCX, and TXT files
+- Role-scoped RAG over PDF, DOCX, and TXT files
 - Redis-backed token revocation
 - Docker Compose
 - Swagger at `/api/docs`
@@ -31,9 +31,14 @@ Set `OPENCODE_GO_API_KEY` in `.env`. The default provider endpoint is
 `https://opencode.ai/zen/go/v1` and the default model is
 `deepseek-v4-flash`.
 
+Docker Compose starts a local Hugging Face Text Embeddings Inference service
+with `sentence-transformers/all-MiniLM-L6-v2`. Approved HR documents are
+embedded into PostgreSQL through pgvector; without the local embedding service,
+indexing fails clearly instead of storing fake vectors.
+
 ## Run Locally
 
-Start PostgreSQL and Redis, then:
+Start PostgreSQL, Redis, MinIO, and the local embeddings service, then:
 
 ```bash
 npm run prisma:migrate
@@ -73,7 +78,11 @@ npm run prisma:migrate
 npm run prisma:seed
 ```
 
-`DocumentChunk.embedding` is currently a text placeholder. When pgvector is enabled, replace it with a vector-compatible column and add the required PostgreSQL extension/migration.
+`DocumentChunk.embedding` stores the pgvector embedding. Chunk text, metadata,
+and vectors all live in PostgreSQL. The current embedding model outputs 384
+dimensions. After changing embedding dimensions or applying the local TEI
+migration, run `POST /api/rag/reindex` as HR/Admin to rebuild approved document
+chunks.
 
 ## API Overview
 
@@ -99,6 +108,8 @@ All application routes use the `/api` prefix, except `GET /health`.
 - `PATCH /api/documents/:id/archive`
 - `POST /api/rag/query`
 - `POST /api/rag/index-document/:documentId`
+- `POST /api/rag/index/:documentId`
+- `POST /api/rag/reindex`
 - `POST /api/chat/ask`
 - `GET /api/chat/conversations`
 - `GET /api/chat/conversations/:id`
@@ -160,8 +171,7 @@ MVP:
 
 Future:
 
-- Optional pgvector embeddings and semantic retrieval
-- MinIO/S3 storage adapter
+- MinIO/S3 storage hardening
 - Power BI PostgreSQL views
 - Prediction jobs after enough clean historical data exists
 - Advanced social risk analysis

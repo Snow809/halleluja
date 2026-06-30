@@ -63,4 +63,20 @@ export class AppConfigService {
       .map((origin) => origin.trim())
       .filter(Boolean);
   }
+
+  get embeddingBaseUrl(): string {
+    return (this.configService.get<string>('EMBEDDING_BASE_URL') ?? '').replace(/\/$/, '');
+  }
+
+  get embeddingProvider(): string {
+    return (this.configService.get<string>('EMBEDDING_PROVIDER') ?? 'tei').toLowerCase();
+  }
+
+  get embeddingModel(): string {
+    return this.configService.get<string>('EMBEDDING_MODEL') ?? 'text-embeddings-inference';
+  }
+
+  get embeddingDimensions(): number {
+    return Number(this.configService.get<string>('EMBEDDING_DIMENSIONS') ?? 384);
+  }
 }

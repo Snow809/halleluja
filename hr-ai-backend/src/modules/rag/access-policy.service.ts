@@ -28,7 +28,7 @@ export class AccessPolicyService {
     if (!actor) return false;
     if (actor.id === targetEmployeeId) return true;
     if (user.role !== 'MANAGER') return false;
-    if (topic === 'salary') return false;
+    if (topic === 'salary' || topic === 'documents') return false;
     return this.prisma.employee
       .count({ where: { id: targetEmployeeId, managerId: actor.id } })
       .then((count) => count > 0);

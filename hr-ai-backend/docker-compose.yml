@@ -1,6 +1,7 @@
 services:
   backend:
     build: .
+    restart: unless-stopped
     ports:
       - "3000:3000"
     env_file:
@@ -10,15 +11,25 @@ services:
       REDIS_HOST: redis
       MINIO_ENDPOINT: minio
       MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+      EMBEDDING_PROVIDER: tei
+      EMBEDDING_BASE_URL: http://embeddings:80/v1
+      EMBEDDING_MODEL: text-embeddings-inference
+      EMBEDDING_DIMENSIONS: 384
     depends_on:
-      - postgres
-      - redis
-      - minio
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+      embeddings:
+        condition: service_started
     volumes:
       - ./uploads:/app/uploads
 
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: hr_ai
       POSTGRES_USER: postgres
@@ -27,14 +38,22 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hr_ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
 
   minio:
     image: minio/minio
+    restart: unless-stopped
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -45,6 +64,20 @@ services:
     volumes:
       - minio-data:/data
 
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    restart: unless-stopped
+    command:
+      - --model-id
+      - sentence-transformers/all-MiniLM-L6-v2
+      - --port
+      - "80"
+    ports:
+      - "8082:80"
+    volumes:
+      - hf-cache:/data
+
 volumes:
   postgres-data:
   minio-data:
+  hf-cache:
