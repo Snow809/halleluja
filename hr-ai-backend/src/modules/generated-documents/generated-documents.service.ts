@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { LlmService } from '../../services/llm/llm.service';
@@ -107,30 +107,50 @@ export class GeneratedDocumentsService {
     return docs.map(doc => this.mapToAppStatus(doc));
   }
 
+  async preview(id: string, user: AuthenticatedUser) {
+    return this.getSignedAccess(id, user, false);
+  }
+
   async download(id: string, user: AuthenticatedUser) {
+    return this.getSignedAccess(id, user, true);
+  }
+
+  private async getSignedAccess(id: string, user: AuthenticatedUser, incrementDownload: boolean) {
     const actor = await this.prisma.employee.findUnique({ where: { userId: user.userId } });
-    const document = await this.prisma.generatedDocument.findUnique({ where: { id } });
-    if (
-      !document ||
-      document.status !== 'APPROVED' ||
-      (user.role !== 'ADMIN' && user.role !== 'HR' && document.employeeId !== actor?.id)
-    ) {
-      return {
-        id,
-        status: 'not-found',
-        message: 'Document not found or access denied.',
-      };
-    }
-    await this.prisma.generatedDocument.update({
+    const document = await this.prisma.generatedDocument.findUnique({
       where: { id },
-      data: { downloads: { increment: 1 } },
+      include: { employee: true },
     });
+    if (!document || document.status !== 'APPROVED') {
+      throw new NotFoundException('Document not found');
+    }
+
+    const isOwner = document.employeeId === actor?.id;
+    const isPrivileged = user.role === 'ADMIN' || user.role === 'HR';
+    const isDirectReport = user.role === 'MANAGER' && document.employee.managerId === actor?.id;
+    if (!isOwner && !isPrivileged && !isDirectReport) {
+      throw new ForbiddenException('Document access denied');
+    }
+
+    const isAnonymized = !isOwner;
+    const filePath = isAnonymized
+      ? document.anonymizedFilePath || document.filePath
+      : document.clearFilePath || document.filePath;
+    if (incrementDownload) {
+      await this.prisma.generatedDocument.update({
+        where: { id },
+        data: { downloads: { increment: 1 } },
+      });
+    }
+
     return {
       id,
       status: 'ready',
-      url: await this.s3.getPresignedUrl(document.filePath, 300),
+      url: await this.s3.getPresignedUrl(filePath, 300),
       fileName: `${document.documentType}.${document.fileType.toLowerCase()}`,
       fileType: document.fileType,
+      previewable: document.fileType.toUpperCase() === 'PDF',
+      anonymized: isAnonymized,
     };
   }
 }

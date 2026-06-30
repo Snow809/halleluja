@@ -21,6 +21,8 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/app/AuthContext";
 import signInImage from "@/assets/purity/signInImage.png";
 
+export const MFA_PENDING_KEY = "intelli-talent-mfa-pending-v1";
+
 export function LoginPage() {
   const { login, user, shell } = useAuth();
   const navigate = useNavigate();
@@ -33,9 +35,11 @@ export function LoginPage() {
   const textColor = useColorModeValue("gray.400", "white");
 
   useEffect(() => {
-    if (user && shell) navigate(`/${shell}/dashboard`, { replace: true });
+    if (user && !user.termsAccepted) navigate("/consent", { replace: true });
+    else if (user && shell) navigate(`/${shell}/dashboard`, { replace: true });
   }, [navigate, shell, user]);
 
+  if (user && !user.termsAccepted) return <Navigate to="/consent" replace />;
   if (user && shell) return <Navigate to={`/${shell}/dashboard`} replace />;
 
   const submit = async (event: FormEvent) => {
@@ -43,7 +47,9 @@ export function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password, remember);
+      const challenge = await login(email, password, remember);
+      sessionStorage.setItem(MFA_PENDING_KEY, JSON.stringify({ ...challenge, remember }));
+      navigate("/mfa", { replace: true });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Connexion impossible.");
     } finally {
@@ -154,6 +160,9 @@ export function LoginPage() {
                   <Link color={titleColor} as="span" ms="5px" fontWeight="bold">
                     admin / hr / manager / collab @ydays.local
                   </Link>
+                  <Text as="span" display="block" mt="4px">
+                    Mot de passe : <Text as="span" fontWeight="bold">Demo1234!</Text>
+                  </Text>
                 </Text>
               </Flex>
             </Flex>

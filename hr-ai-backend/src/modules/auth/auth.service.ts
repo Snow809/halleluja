@@ -1,6 +1,9 @@
 import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
+import { authenticator } from 'otplib';
+import * as QRCode from 'qrcode';
 import { PrismaService } from '../../database/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
@@ -10,6 +13,17 @@ import { RedisService } from '../../common/redis/redis.service';
 import { AppConfigService } from '../../config/config.service';
 import { LoginHistoryService } from './login-history.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { MfaVerifyDto } from './dto/mfa-verify.dto';
+
+const MFA_CHALLENGE_TTL_SECONDS = 5 * 60;
+const TERMS_VERSION = '2026-06-security-demo';
+
+interface MfaChallenge {
+  userId: string;
+  email: string;
+  ip?: string;
+  userAgent?: string;
+}
 
 @Injectable()
 export class AuthService {
@@ -46,31 +60,105 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Record successful login
-    await this.loginHistoryService.recordLogin(user.id, user.email, ip, userAgent);
+    const setupRequired = !user.mfaSecret || !user.mfaEnabled;
+    const secret = user.mfaSecret ?? authenticator.generateSecret();
+    if (!user.mfaSecret) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { mfaSecret: secret },
+      });
+    }
 
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      role: user.roles?.[0]?.role?.name || 'COLLABORATOR',
-      fullName: user.fullName || user.email.split('@')[0],
-    };
+    const mfaToken = randomUUID();
+    await this.redisService.setJson(
+      `mfa:${mfaToken}`,
+      { userId: user.id, email: user.email, ip, userAgent },
+      MFA_CHALLENGE_TTL_SECONDS,
+    );
 
-    const accessToken = await this.jwtService.signAsync(payload);
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      secret: this.config.jwtRefreshSecret,
-      expiresIn: this.config.jwtRefreshExpiresIn,
-    });
-
-    await this.redisService.storeRefreshToken(refreshToken, this.parseExpires(this.config.jwtRefreshExpiresIn));
-
+    const otpUri = authenticator.keyuri(user.email, 'Intelli-Talent', secret);
     return {
-      accessToken,
-      refreshToken,
-      tokenType: 'Bearer',
+      mfaRequired: true,
+      mfaToken,
+      email: user.email,
+      setupRequired,
+      qrCodeUrl: setupRequired ? await QRCode.toDataURL(otpUri) : undefined,
+      secret: setupRequired ? secret : undefined,
+      expiresInSeconds: MFA_CHALLENGE_TTL_SECONDS,
     };
   }
 
+  async verifyMfa(dto: MfaVerifyDto) {
+    const challenge = await this.redisService.getJson<MfaChallenge>(`mfa:${dto.mfaToken}`);
+
+    if (!challenge) {
+      throw new UnauthorizedException('MFA challenge expired or invalid');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: challenge.userId },
+      include: {
+        roles: {
+          include: {
+            role: true,
+          },
+        },
+      },
+    });
+
+    if (!user || user.accountStatus !== 'ACTIVE' || !user.mfaSecret) {
+      throw new UnauthorizedException('Invalid MFA challenge');
+    }
+
+    const receivedCode = String(dto.code ?? '').replace(/\D/g, '');
+    const secret = String(user.mfaSecret).replace(/\s+/g, '').toUpperCase();
+
+    const previousOptions = { ...authenticator.options };
+
+    authenticator.options = {
+      ...authenticator.options,
+      step: 30,
+      digits: 6,
+      window: 2,
+    };
+
+    const delta = authenticator.checkDelta(receivedCode, secret);
+    const expectedCode = authenticator.generate(secret);
+
+    authenticator.options = previousOptions;
+
+    console.log('[MFA DEBUG]', {
+      email: user.email,
+      receivedCode,
+      expectedCode,
+      serverTime: new Date().toISOString(),
+      delta,
+      secondsOffset: delta === null ? null : delta * 30,
+    });
+
+    if (delta === null) {
+      throw new UnauthorizedException('Invalid authentication code');
+    }
+
+    await this.redisService.delete(`mfa:${dto.mfaToken}`);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        mfaEnabled: true,
+        lastLoginAt: new Date(),
+      },
+    });
+
+    await this.loginHistoryService.recordLogin(user.id, user.email, challenge.ip, challenge.userAgent);
+
+    return this.issueTokens({
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.roles?.[0]?.role?.name || 'COLLABORATOR',
+    });
+  }
   async refresh(dto: RefreshTokenDto) {
     const refreshToken = dto.refreshToken;
     if (!refreshToken) {
@@ -97,11 +185,13 @@ export class AuthService {
       sub: payload.sub,
       email: payload.email,
       role: payload.role,
+      fullName: payload.fullName,
     });
     const newRefreshToken = await this.jwtService.signAsync({
       sub: payload.sub,
       email: payload.email,
       role: payload.role,
+      fullName: payload.fullName,
     }, {
       secret: this.config.jwtRefreshSecret,
       expiresIn: this.config.jwtRefreshExpiresIn,
@@ -112,6 +202,29 @@ export class AuthService {
     return {
       accessToken: newAccessToken,
       refreshToken: newRefreshToken,
+      tokenType: 'Bearer',
+    };
+  }
+
+  private async issueTokens(user: { id: string; email: string; role: string; fullName: string }) {
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      fullName: user.fullName || user.email.split('@')[0],
+    };
+
+    const accessToken = await this.jwtService.signAsync(payload);
+    const refreshToken = await this.jwtService.signAsync(payload, {
+      secret: this.config.jwtRefreshSecret,
+      expiresIn: this.config.jwtRefreshExpiresIn,
+    });
+
+    await this.redisService.storeRefreshToken(refreshToken, this.parseExpires(this.config.jwtRefreshExpiresIn));
+
+    return {
+      accessToken,
+      refreshToken,
       tokenType: 'Bearer',
     };
   }
@@ -252,9 +365,24 @@ export class AuthService {
       });
     }
 
+    const currentUser = await this.prisma.user.findUnique({
+      where: { id: user.userId },
+      select: {
+        mfaEnabled: true,
+        termsAcceptedAt: true,
+        termsVersion: true,
+        consents: true,
+      },
+    });
+
     return {
       ...user,
       employee,
+      mfaEnabled: currentUser?.mfaEnabled ?? false,
+      termsAccepted: currentUser?.termsVersion === TERMS_VERSION && Boolean(currentUser?.termsAcceptedAt),
+      termsAcceptedAt: currentUser?.termsAcceptedAt,
+      termsVersion: currentUser?.termsVersion,
+      consents: currentUser?.consents ?? {},
     };
   }
 }

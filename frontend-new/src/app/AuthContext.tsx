@@ -2,13 +2,15 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { clearSession, readSession, writeSession } from "@/api/session";
-import { AppShell, AuthUser, BackendRole } from "@/api/types";
+import { AppShell, AuthUser, BackendRole, MfaChallenge } from "@/api/types";
 
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   shell: AppShell | null;
-  login(email: string, password: string, remember: boolean): Promise<void>;
+  login(email: string, password: string, remember: boolean): Promise<MfaChallenge>;
+  verifyMfa(input: { mfaToken: string; code: string; remember: boolean }): Promise<AuthUser>;
+  refreshUser(): Promise<AuthUser>;
   logout(): Promise<void>;
 }
 
@@ -42,6 +44,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         clearSession();
         setUser(null);
+        if (!isAuthRoute(window.location.pathname)) {
+          window.location.replace("/login");
+          return;
+        }
       } finally {
         setLoading(false);
       }
@@ -50,9 +56,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void restore();
 
     const expired = () => {
+      clearSession();
       queryClient.clear();
       setUser(null);
       setLoading(false);
+      if (!isAuthRoute(window.location.pathname)) {
+        window.location.assign("/login");
+      }
     };
 
     window.addEventListener("session-expired", expired);
@@ -64,9 +74,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       loading,
       shell: user ? roleToShell(user.role) : null,
-      async login(email, password, remember) {
+      async login(email, password) {
+        clearSession();
         queryClient.clear();
-        const tokens = await api.post<{ accessToken: string; refreshToken: string }>("/auth/login", { email, password });
+        return api.post<MfaChallenge>("/auth/login", { email, password });
+      },
+      async verifyMfa({ mfaToken, code, remember }) {
+        queryClient.clear();
+        const tokens = await api.post<{ accessToken: string; refreshToken: string }>("/auth/mfa/verify", {
+          mfaToken,
+          code,
+          remember,
+        });
         writeSession({ ...tokens, persistent: remember });
         const current = await api.get<AuthUser>("/auth/me");
         if (!roleToShell(current.role)) {
@@ -74,6 +93,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           throw new Error("Ce rôle n'est pas encore pris en charge par l'interface.");
         }
         setUser(current);
+        return current;
+      },
+      async refreshUser() {
+        const current = await api.get<AuthUser>("/auth/me");
+        setUser(current);
+        return current;
       },
       async logout() {
         const session = readSession();
@@ -86,10 +111,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
     }),
-    [loading, queryClient, user],
+    [queryClient, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+function isAuthRoute(pathname: string) {
+  return pathname === "/login" || pathname === "/mfa" || pathname === "/consent";
 }
 
 export function useAuth() {

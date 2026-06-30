@@ -13,6 +13,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { TokenResponseDto } from './dto/token-response.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { MfaVerifyDto } from './dto/mfa-verify.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -23,10 +24,15 @@ export class AuthController {
   ) {}
 
   @Post('login')
-  login(@Body() dto: LoginDto, @Req() req: Request): Promise<TokenResponseDto> {
+  login(@Body() dto: LoginDto, @Req() req: Request) {
     const ip = req.ip || req.socket?.remoteAddress;
     const userAgent = req.headers['user-agent'];
     return this.authService.login(dto, ip, userAgent);
+  }
+
+  @Post('mfa/verify')
+  verifyMfa(@Body() dto: MfaVerifyDto): Promise<TokenResponseDto> {
+    return this.authService.verifyMfa(dto);
   }
 
   @Post('refresh')

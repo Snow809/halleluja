@@ -7,6 +7,8 @@ import { GenerationService } from '../documents/generation.service';
 import { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { S3Service } from '../../services/storage/s3.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TemplateDataService } from '../documents/template-data.service';
+import { normalizeTemplateFieldSchema, sanitizeFormData } from '../documents/template-fields';
 
 @Injectable()
 export class EmployeesService {
@@ -15,6 +17,7 @@ export class EmployeesService {
     private readonly generationService: GenerationService,
     private readonly s3: S3Service,
     private readonly notifications: NotificationsService,
+    private readonly templateData: TemplateDataService = new TemplateDataService(),
   ) {}
 
   async create(dto: CreateEmployeeDto) {
@@ -175,14 +178,20 @@ export class EmployeesService {
     });
   }
 
-  async createDocumentRequest(userId: string, dto: { templateId: string; note?: string }) {
-    const employee = await this.prisma.employee.findUnique({ where: { userId } });
+  async createDocumentRequest(userId: string, dto: { templateId: string; note?: string; formData?: Record<string, unknown> }) {
+    const employee = await this.prisma.employee.findUnique({
+      where: { userId },
+      include: { department: true, position: true, manager: true },
+    });
     if (!employee) throw new NotFoundException('Employee not found');
 
     const template = await this.prisma.documentTemplate.findUnique({ where: { id: dto.templateId } });
     if (!template || !template.isActive) {
       throw new NotFoundException('Template introuvable ou inactif');
     }
+    const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
+    const cleanFormData = sanitizeFormData(dto.formData);
+    this.templateData.assertComplete(fieldSchema, employee, cleanFormData);
 
     const request = await this.prisma.hrRequest.create({
       data: {
@@ -194,6 +203,7 @@ export class EmployeesService {
         status: 'PENDING',
         priority: 'NORMAL',
         note: dto.note,
+        formData: cleanFormData,
       }
     });
     await this.notifyRequestReviewers(employee, request.id, request.requestType);

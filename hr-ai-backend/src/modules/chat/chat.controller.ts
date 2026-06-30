@@ -45,13 +45,13 @@ export class ChatController {
     return this.chatService.findConversation(id, user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.HR)
+  @Roles(UserRole.ADMIN)
   @Get('supervision/messages')
   supervision(@CurrentUser() user: AuthenticatedUser) {
     return this.chatService.supervision(user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.HR)
+  @Roles(UserRole.ADMIN)
   @Get('supervision/summary')
   supervisionSummary(@CurrentUser() user: AuthenticatedUser) {
     return this.chatService.supervisionSummary(user);

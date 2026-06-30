@@ -79,4 +79,16 @@ export class AppConfigService {
   get embeddingDimensions(): number {
     return Number(this.configService.get<string>('EMBEDDING_DIMENSIONS') ?? 384);
   }
+
+  get presidioAnalyzerUrl(): string {
+    return (this.configService.get<string>('PRESIDIO_ANALYZER_URL') ?? 'http://localhost:5002').replace(/\/$/, '');
+  }
+
+  get presidioAnonymizerUrl(): string {
+    return (this.configService.get<string>('PRESIDIO_ANONYMIZER_URL') ?? 'http://localhost:5001').replace(/\/$/, '');
+  }
+
+  get gotenbergUrl(): string {
+    return (this.configService.get<string>('GOTENBERG_URL') ?? 'http://localhost:3001').replace(/\/$/, '');
+  }
 }

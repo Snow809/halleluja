@@ -8,11 +8,14 @@ import { TemplatesController } from './templates.controller';
 import { GenerationService } from './generation.service';
 import { RagModule } from '../rag/rag.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AnonymizationModule } from '../../services/anonymization/anonymization.module';
+import { DocumentPdfService } from './document-pdf.service';
+import { TemplateDataService } from './template-data.service';
 
 @Module({
-  imports: [AuditModule, StorageModule, RagModule, NotificationsModule],
+  imports: [AuditModule, StorageModule, RagModule, NotificationsModule, AnonymizationModule],
   controllers: [TemplatesController, DocumentsController],
-  providers: [DocumentsService, TemplatesService, GenerationService],
-  exports: [DocumentsService, GenerationService, StorageModule],
+  providers: [DocumentsService, TemplatesService, GenerationService, DocumentPdfService, TemplateDataService],
+  exports: [DocumentsService, GenerationService, DocumentPdfService, TemplateDataService, StorageModule],
 })
 export class DocumentsModule {}

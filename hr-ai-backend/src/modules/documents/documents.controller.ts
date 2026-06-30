@@ -79,6 +79,11 @@ export class DocumentsController {
     return this.documentsService.getDownload(id, user);
   }
 
+  @Get(':id/preview')
+  getPreview(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.documentsService.getPreview(id, user);
+  }
+
   @Get('download/:id')
   async downloadDocument(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     const doc = await this.prisma.generatedDocument.findUnique({

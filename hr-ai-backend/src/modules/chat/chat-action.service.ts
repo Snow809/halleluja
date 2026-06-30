@@ -12,6 +12,22 @@ import { EmployeesService } from '../employees/employees.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { AuditService } from '../audit/audit.service';
 import { LlmMessage, LlmService } from '../../services/llm/llm.service';
+import { TemplateDataService } from '../documents/template-data.service';
+import {
+  normalizeTemplateFieldSchema,
+  sanitizeFormData,
+  TemplateFieldDefinition,
+} from '../documents/template-fields';
+
+type ActionProposal =
+  | {
+      id: string;
+      type: AiActionType;
+      summary: string;
+      payload: Record<string, unknown>;
+      expiresAt: Date;
+    }
+  | { followUp: string };
 
 @Injectable()
 export class ChatActionService {
@@ -21,6 +37,7 @@ export class ChatActionService {
     private readonly onboardingService: OnboardingService,
     private readonly auditService: AuditService,
     private readonly llmService: LlmService,
+    private readonly templateData: TemplateDataService = new TemplateDataService(),
   ) {}
 
   async propose(
@@ -28,7 +45,7 @@ export class ChatActionService {
     conversationId: string,
     user: AuthenticatedUser,
     history: LlmMessage[] = [],
-  ) {
+  ): Promise<ActionProposal | null> {
     const normalized = this.normalize(question);
     const selfServiceProposal = await this.proposeSelfServiceAction(
       question,
@@ -70,6 +87,10 @@ export class ChatActionService {
           result = await this.employeesService.createDocumentRequest(user.userId, {
             templateId: String(payload.templateId),
             note: payload.note ? String(payload.note) : undefined,
+            formData:
+              payload.formData && typeof payload.formData === 'object'
+                ? (payload.formData as Record<string, unknown>)
+                : undefined,
           });
           break;
         case 'REVIEW_HR_REQUEST':
@@ -143,18 +164,51 @@ export class ChatActionService {
         title: true,
         documentType: true,
         description: true,
+        fieldSchema: true,
       },
     });
     const detected = await this.llmService.detectSelfServiceAction({
       question,
       history,
-      templates,
+      templates: templates.map((template) => {
+        const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
+        return {
+          id: template.id,
+          title: template.title,
+          documentType: template.documentType,
+          description: template.description,
+          requiredFields: fieldSchema
+            .filter((field) => field.required)
+            .map(({ key, label, source, inputType, aliases }) => ({
+              key,
+              label,
+              source,
+              inputType,
+              aliases,
+            })),
+        };
+      }),
       currentDate: new Date().toISOString().slice(0, 10),
     });
     if (detected.type === 'NONE') return null;
     if (detected.type === 'CREATE_DOCUMENT_REQUEST') {
       const template = templates.find((item) => item.id === detected.templateId);
       if (!template) return null;
+      const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
+      const formData = sanitizeFormData(detected.formData);
+      if (fieldSchema.length > 0) {
+        const employee = await this.prisma.employee.findUnique({
+          where: { userId: user.userId },
+          include: { department: true, position: true, manager: true },
+        });
+        if (!employee) {
+          return { followUp: 'Je ne trouve pas votre profil employé pour préparer cette demande de document.' };
+        }
+        const { missingFields } = this.templateData.resolve(fieldSchema, employee, formData);
+        if (missingFields.length > 0) {
+          return { followUp: this.documentMissingFieldsQuestion(template.title, missingFields) };
+        }
+      }
       return this.createDraft(
         conversationId,
         user.userId,
@@ -162,8 +216,10 @@ export class ChatActionService {
         {
           templateId: template.id,
           note: detected.note || 'Requested through ARIA',
+          formData,
+          formDataLabels: Object.fromEntries(fieldSchema.map((field) => [field.key, field.label])),
         },
-        `Request the document "${template.title}"`,
+        `Préparer la demande de document "${template.title}"`,
       );
     }
     if (!detected.startDate || !detected.endDate) return null;
@@ -347,5 +403,10 @@ export class ChatActionService {
 
   private normalize(value: string) {
     return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  }
+
+  private documentMissingFieldsQuestion(templateTitle: string, fields: TemplateFieldDefinition[]) {
+    const labels = fields.map((field) => `- ${field.label}`).join('\n');
+    return `Pour préparer **${templateTitle}**, il me manque ces informations :\n\n${labels}\n\nRépondez avec ces valeurs et je préparerai l'action à valider.`;
   }
 }

@@ -15,6 +15,9 @@ services:
       EMBEDDING_BASE_URL: http://embeddings:80/v1
       EMBEDDING_MODEL: text-embeddings-inference
       EMBEDDING_DIMENSIONS: 384
+      PRESIDIO_ANALYZER_URL: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_URL: http://presidio-anonymizer:3000
+      GOTENBERG_URL: http://gotenberg:3000
     depends_on:
       postgres:
         condition: service_healthy
@@ -23,6 +26,12 @@ services:
       minio:
         condition: service_started
       embeddings:
+        condition: service_started
+      presidio-analyzer:
+        condition: service_started
+      presidio-anonymizer:
+        condition: service_started
+      gotenberg:
         condition: service_started
     volumes:
       - ./uploads:/app/uploads
@@ -76,6 +85,24 @@ services:
       - "8082:80"
     volumes:
       - hf-cache:/data
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    restart: unless-stopped
+    ports:
+      - "5002:3000"
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    restart: unless-stopped
+    ports:
+      - "5001:3000"
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
 
 volumes:
   postgres-data:

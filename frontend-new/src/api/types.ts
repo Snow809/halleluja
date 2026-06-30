@@ -36,6 +36,29 @@ export interface AuthUser {
   role: BackendRole;
   fullName: string;
   employee?: Employee;
+  mfaEnabled?: boolean;
+  termsAccepted?: boolean;
+  termsAcceptedAt?: string;
+  termsVersion?: string;
+  consents?: Record<string, unknown>;
+}
+
+export interface MfaChallenge {
+  mfaRequired: true;
+  mfaToken: string;
+  email: string;
+  setupRequired: boolean;
+  qrCodeUrl?: string;
+  secret?: string;
+  expiresInSeconds: number;
+}
+
+export interface ConsentStatus {
+  termsAccepted: boolean;
+  requiredVersion: string;
+  termsAcceptedAt?: string;
+  termsVersion?: string;
+  consents?: Record<string, unknown>;
 }
 
 export interface HrRequest {
@@ -49,6 +72,7 @@ export interface HrRequest {
   priority: "NORMAL" | "URGENT";
   status: "PENDING" | "APPROVED" | "REJECTED";
   note?: string;
+  formData?: Record<string, unknown>;
   comment?: string;
   reviewedAt?: string;
   createdAt: string;
@@ -87,6 +111,28 @@ export interface GeneratedDocument {
   downloads: number;
   status: string;
   generatedAt: string;
+  anonymized?: boolean;
+}
+
+export interface DocumentPreview {
+  url: string | null;
+  fileName: string;
+  fileType: string;
+  previewable: boolean;
+  anonymized?: boolean;
+}
+
+export interface DataErasureRequest {
+  id: string;
+  employeeId: string;
+  reason: string;
+  notes?: string;
+  status: "PENDING" | "APPROVED_FOR_FUTURE_PURGE" | "CANCELLED";
+  createdAt: string;
+  reviewedAt?: string;
+  employee?: Employee;
+  requester?: { id: string; fullName: string; email: string };
+  reviewer?: { id: string; fullName: string; email: string };
 }
 
 export interface DocumentTemplate {
@@ -96,6 +142,19 @@ export interface DocumentTemplate {
   category: string;
   description?: string;
   isActive: boolean;
+  fieldSchema?: TemplateField[];
+  requiredFields?: TemplateField[];
+  missingDataHints?: TemplateField[];
+}
+
+export interface TemplateField {
+  key: string;
+  label: string;
+  source: "EMPLOYEE" | "REQUEST" | "SYSTEM";
+  required: boolean;
+  sensitive?: boolean;
+  inputType?: "text" | "date" | "number" | "year";
+  aliases?: string[];
 }
 
 export interface WorkflowTask {

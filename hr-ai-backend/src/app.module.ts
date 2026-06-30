@@ -23,6 +23,8 @@ import { RedisModule } from './common/redis/redis.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { HrContactModule } from './modules/hr-contact/hr-contact.module';
 import { EmployeeRiskAlertsModule } from './modules/employee-risk-alerts/employee-risk-alerts.module';
+import { ConsentsModule } from './modules/consents/consents.module';
+import { DataErasureModule } from './modules/data-erasure/data-erasure.module';
 
 @Module({
   imports: [
@@ -49,6 +51,8 @@ import { EmployeeRiskAlertsModule } from './modules/employee-risk-alerts/employe
     NotificationsModule,
     HrContactModule,
     EmployeeRiskAlertsModule,
+    ConsentsModule,
+    DataErasureModule,
   ],
   controllers: [AppController],
 })

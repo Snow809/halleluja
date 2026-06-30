@@ -1,9 +1,9 @@
-import 'dotenv/config';
+﻿import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import * as bcrypt from 'bcrypt';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import {
   CreateBucketCommand,
   HeadBucketCommand,
@@ -71,37 +71,110 @@ async function uploadSeedObject(key: string, body: Buffer, contentType: string) 
   );
 }
 
-function createTemplate(title: string) {
-  const zip = new PizZip();
-  zip.file(
-    '[Content_Types].xml',
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
-      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
-      '<Default Extension="xml" ContentType="application/xml"/>' +
-      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
-      '</Types>',
-  );
-  zip.folder('_rels')?.file(
-    '.rels',
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
-      '</Relationships>',
-  );
-  zip.folder('word')?.file(
-    'document.xml',
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-      `<w:p><w:r><w:t>${title}</w:t></w:r></w:p>` +
-      '<w:p><w:r><w:t>Employé : {employee_name}</w:t></w:r></w:p>' +
-      '<w:p><w:r><w:t>Poste : {employee_position}</w:t></w:r></w:p>' +
-      '<w:p><w:r><w:t>Département : {department}</w:t></w:r></w:p>' +
-      '<w:p><w:r><w:t>Manager : {manager_name}</w:t></w:r></w:p>' +
-      '<w:p><w:r><w:t>Date : {date}</w:t></w:r></w:p>' +
-      '<w:sectPr/></w:body></w:document>',
-  );
-  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+type SeedTemplateField = {
+  key: string;
+  label: string;
+  source: 'EMPLOYEE' | 'REQUEST' | 'SYSTEM';
+  required: boolean;
+  sensitive?: boolean;
+  inputType?: 'text' | 'date' | 'number' | 'year';
+  aliases?: string[];
+};
+
+const seedFieldMap: Record<string, Omit<SeedTemplateField, 'label'>> = {
+  "[Nom et Prénom de l'employé(e)]": {
+    key: 'employeeFullName',
+    source: 'EMPLOYEE',
+    required: true,
+    sensitive: true,
+  },
+  '[Numéro CIN]': { key: 'cinNumber', source: 'EMPLOYEE', required: true, sensitive: true },
+  '[Numéro CNSS personnel]': {
+    key: 'cnssNumber',
+    source: 'EMPLOYEE',
+    required: true,
+    sensitive: true,
+  },
+  "[Nom de la compagnie d'assurance, ex: Wafa Assurance, RMA, Sanlam]": {
+    key: 'insuranceCompany',
+    source: 'REQUEST',
+    required: true,
+  },
+  '[Numéro de police]': {
+    key: 'insurancePolicyNumber',
+    source: 'REQUEST',
+    required: true,
+    sensitive: true,
+  },
+  "[Date d'embauche]": { key: 'hireDate', source: 'EMPLOYEE', required: true, inputType: 'date' },
+  '[Intitulé du poste]': { key: 'positionTitle', source: 'EMPLOYEE', required: true },
+  '[Montant en chiffres]': {
+    key: 'salaryAmount',
+    source: 'EMPLOYEE',
+    required: true,
+    sensitive: true,
+    inputType: 'number',
+  },
+  '[Montant en toutes lettres]': {
+    key: 'salaryAmountWords',
+    source: 'EMPLOYEE',
+    required: true,
+    sensitive: true,
+  },
+  '[Année de référence, ex: 2025]': {
+    key: 'referenceYear',
+    source: 'REQUEST',
+    required: true,
+    inputType: 'year',
+  },
+  '[Rémunération brute globale]': {
+    key: 'grossAnnualSalary',
+    source: 'REQUEST',
+    required: true,
+    sensitive: true,
+    inputType: 'number',
+  },
+  '[Salaire net imposable]': {
+    key: 'taxableSalary',
+    source: 'REQUEST',
+    required: true,
+    sensitive: true,
+    inputType: 'number',
+  },
+  '[Montant IR prélevé]': {
+    key: 'taxWithheld',
+    source: 'REQUEST',
+    required: true,
+    sensitive: true,
+    inputType: 'number',
+  },
+  "[Date d'entrée]": { key: 'entryDate', source: 'EMPLOYEE', required: true, inputType: 'date' },
+  '[Date de sortie]': { key: 'exitDate', source: 'REQUEST', required: true, inputType: 'date' },
+  '[Motif de la rupture, ex : Licenciement pour motif économique / Restructuration]': {
+    key: 'exitReason',
+    source: 'REQUEST',
+    required: true,
+  },
+  '[Date de délivrance]': { key: 'issueDate', source: 'SYSTEM', required: true, inputType: 'date' },
+  '[Cachet et Signature]': { key: 'stampAndSignature', source: 'SYSTEM', required: false },
+};
+
+function buildFieldSchema(templateBuffer: Buffer): SeedTemplateField[] {
+  const zip = new PizZip(templateBuffer);
+  const labels = new Set<string>();
+  for (const path of Object.keys(zip.files)) {
+    if (!path.startsWith('word/') || !path.endsWith('.xml')) continue;
+    const file = zip.file(path);
+    if (!file) continue;
+    for (const match of file.asText().matchAll(/\[[^\]]+\]/g)) {
+      labels.add(match[0]);
+    }
+  }
+  return [...labels].map((label) => {
+    const known = seedFieldMap[label];
+    if (known) return { ...known, label };
+    return { key: label.replace(/[[\]]/g, ''), label, source: 'REQUEST', required: true };
+  });
 }
 
 function parseCsv(path: string): EmployeeCsvRow[] {
@@ -113,9 +186,198 @@ function parseCsv(path: string): EmployeeCsvRow[] {
   });
 }
 
+const atlasTemplateSeeds = [
+  {
+    title: 'Atlas Tech - Attestation CNSS',
+    documentType: 'Attestation CNSS',
+    category: 'Attestations',
+    description: 'Attestation CNSS officielle générée depuis les données collaborateur.',
+    fixture: 'Atlas_Tech_Attestation_CNSS_Vierge.docx',
+    filePath: 'templates/atlas-tech/attestation-cnss.docx',
+  },
+  {
+    title: 'Atlas Tech - Attestation AMO / Mutuelle',
+    documentType: 'Attestation AMO / Mutuelle',
+    category: 'Attestations',
+    description: 'Attestation mutuelle avec compagnie d’assurance et numéro de police.',
+    fixture: 'Atlas_Tech_Attestation_Mutuelle_AMO_Vierge.docx',
+    filePath: 'templates/atlas-tech/attestation-mutuelle-amo.docx',
+  },
+  {
+    title: 'Atlas Tech - Attestation de salaire',
+    documentType: 'Attestation de salaire',
+    category: 'Paie',
+    description: 'Attestation de salaire générée depuis les données RH autorisées.',
+    fixture: 'Atlas_Tech_Attestation_Salaire_Vierge.docx',
+    filePath: 'templates/atlas-tech/attestation-salaire.docx',
+  },
+  {
+    title: 'Atlas Tech - Attestation IR',
+    documentType: 'Attestation IR',
+    category: 'Paie',
+    description: 'Attestation IR avec année de référence et montants fiscaux.',
+    fixture: 'Atlas_Tech_Attestation_IR_Vierge.docx',
+    filePath: 'templates/atlas-tech/attestation-ir.docx',
+  },
+  {
+    title: 'Atlas Tech - Attestation cessation IPE',
+    documentType: 'Attestation cessation IPE',
+    category: 'Attestations',
+    description: 'Attestation de cessation pour dossier IPE.',
+    fixture: 'Atlas_Tech_Attestation_Cessation_IPE_Vierge.docx',
+    filePath: 'templates/atlas-tech/attestation-cessation-ipe.docx',
+  },
+];
+
+async function seedAtlasTemplates(uploadedBy: string) {
+  await prisma.documentTemplate.deleteMany({
+    where: {
+      OR: [
+        { filePath: { startsWith: 'templates/atlas-tech/' } },
+        { filePath: { startsWith: 'templates/modele-' } },
+        { title: { in: atlasTemplateSeeds.map((template) => template.title) } },
+      ],
+    },
+  });
+  for (const template of atlasTemplateSeeds) {
+    const body = readFileSync(join(__dirname, 'fixtures', 'templates', template.fixture));
+    await uploadSeedObject(
+      template.filePath,
+      body,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    await prisma.documentTemplate.create({
+      data: {
+        uploadedBy,
+        title: template.title,
+        documentType: template.documentType,
+        category: template.category,
+        description: template.description,
+        filePath: template.filePath,
+        sizeBytes: body.length,
+        fileType: 'DOCX',
+        isActive: true,
+        fieldSchema: buildFieldSchema(body) as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+}
+
+async function hydrateEmployeeDocumentFields() {
+  const employees = await prisma.employee.findMany();
+  for (const [index, employee] of employees.entries()) {
+    await prisma.employee.update({
+      where: { id: employee.id },
+      data: {
+        cinNumber: employee.cinNumber ?? `CIN${String(index + 1).padStart(5, '0')}`,
+        cnssNumber: employee.cnssNumber ?? `CNSS${String(900000 + index)}`,
+        insuranceCompany: employee.insuranceCompany ?? 'Wafa Assurance',
+        insurancePolicyNumber: employee.insurancePolicyNumber ?? `POL-${employee.employeeNumber}`,
+      },
+    });
+  }
+}
+
+async function seedHrDemoDocuments(uploadedBy: string, collabId: string) {
+  const documentSeeds = [
+    {
+      title: 'Contrat CDI Nadia Amrani',
+      documentType: 'Contrat',
+      category: 'Contrats',
+      filePath: 'hr-documents/contrat-nadia-amrani.txt',
+      content: 'Contrat CDI de Nadia Amrani. Document privé employé.',
+      employeeId: collabId,
+      isPublic: false,
+      visibility: 'EMPLOYEE_PRIVATE' as const,
+    },
+    {
+      title: 'Bulletin de paie Mai 2026',
+      documentType: 'Bulletin de paie',
+      category: 'Paie',
+      filePath: 'hr-documents/bulletin-mai-2026.txt',
+      content: 'Bulletin de paie de mai 2026. Document privé employé.',
+      employeeId: collabId,
+      isPublic: false,
+      visibility: 'EMPLOYEE_PRIVATE' as const,
+    },
+    {
+      title: 'Règlement intérieur Maroc 2026',
+      documentType: 'Politique',
+      category: 'Politiques',
+      filePath: 'hr-documents/reglement-interieur-maroc-2026.txt',
+      content: 'Règlement intérieur 2026. Respect, sécurité, confidentialité et égalité professionnelle.',
+      isPublic: true,
+      visibility: 'PUBLIC' as const,
+    },
+    {
+      title: 'Guide congés et absences',
+      documentType: 'Procédure',
+      category: 'Procédures',
+      filePath: 'hr-documents/guide-conges-absences.txt',
+      content: 'Les demandes de congés doivent être soumises dans le portail. Un justificatif est requis pour un congé maladie.',
+      isPublic: true,
+      visibility: 'PUBLIC' as const,
+    },
+  ];
+
+  await prisma.hrDocument.deleteMany({
+    where: { filePath: { in: documentSeeds.map((document) => document.filePath) } },
+  });
+
+  for (const document of documentSeeds) {
+    const body = Buffer.from(document.content, 'utf8');
+    await uploadSeedObject(document.filePath, body, 'text/plain; charset=utf-8');
+    const storedDocument = await prisma.hrDocument.create({
+      data: {
+        uploadedBy,
+        employeeId: document.employeeId,
+        title: document.title,
+        documentType: document.documentType,
+        category: document.category,
+        filePath: document.filePath,
+        sizeBytes: body.length,
+        fileType: 'TXT',
+        isPublic: document.isPublic,
+        visibility: document.visibility,
+        allowedRoles: [],
+        status: 'APPROVED',
+      },
+    });
+    await prisma.documentChunk.create({
+      data: {
+        documentId: storedDocument.id,
+        chunkText: document.content,
+        chunkOrder: 0,
+      },
+    });
+  }
+}
+
 async function main() {
   const existingUsers = await prisma.user.count();
   if (existingUsers > 0) {
+    const hrUser = await prisma.user.findFirst({
+      where: {
+        roles: {
+          some: {
+            role: {
+              name: { in: ['HR', 'ADMIN'] },
+            },
+          },
+        },
+      },
+    });
+    if (hrUser) {
+      await hydrateEmployeeDocumentFields();
+      await seedAtlasTemplates(hrUser.id);
+      const collab = await prisma.employee.findUnique({ where: { email: 'collab@ydays.local' } });
+      if (collab) await seedHrDemoDocuments(hrUser.id, collab.id);
+      await prisma.generatedDocument.deleteMany({
+        where: { fileType: 'TXT', filePath: { startsWith: 'generated/attestation-nadia-amrani' } },
+      });
+      console.log('Database already seeded. Refreshed Atlas Tech templates and HR demo documents.');
+      return;
+    }
     console.log('Database already seeded. Skipping seed to prevent data loss.');
     return;
   }
@@ -234,6 +496,10 @@ async function main() {
         phone: row.phone,
         location: row.location,
         address: row.address,
+        cinNumber: `CIN${row.employeeNumber.replace(/\D/g, '').padStart(5, '0')}`,
+        cnssNumber: `CNSS${row.employeeNumber.replace(/\D/g, '').padStart(6, '0')}`,
+        insuranceCompany: 'Wafa Assurance',
+        insurancePolicyNumber: `POL-${row.employeeNumber}`,
         skills: row.skills.split(';').filter(Boolean),
         salary: Number(row.salary),
         hireDate: new Date(row.hireDate),
@@ -260,74 +526,10 @@ async function main() {
 
   const hrUser = userByEmail.get('hr@ydays.local')!;
   const collab = employeeByEmail.get('collab@ydays.local')!;
-  const templateSeeds = [
-    { title: 'Modèle attestation de travail', documentType: 'Attestation de travail', category: 'Attestations', description: 'Justificatif professionnel pour banques, visas et administrations.', filePath: 'templates/modele-attestation-travail.docx', fileType: 'DOCX' },
-    { title: 'Modèle bulletin de paie', documentType: 'Bulletin de paie', category: 'Paie', description: 'Copie de bulletin de paie mensuel.', filePath: 'templates/modele-bulletin-paie.docx', fileType: 'DOCX' },
-    { title: 'Modèle attestation CNSS', documentType: 'Attestation CNSS', category: 'Attestations', description: 'Attestation administrative liée aux déclarations sociales.', filePath: 'templates/modele-attestation-cnss.docx', fileType: 'DOCX' },
-    { title: 'Modèle attestation de congés', documentType: 'Attestation de congés', category: 'Attestations', description: 'Confirmation officielle de droits ou périodes de congés.', filePath: 'templates/modele-attestation-conges.docx', fileType: 'DOCX' },
-  ];
-  for (const template of templateSeeds) {
-    const body = createTemplate(template.title);
-    await uploadSeedObject(
-      template.filePath,
-      body,
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    );
-    await prisma.documentTemplate.create({
-      data: { ...template, sizeBytes: body.length, uploadedBy: hrUser.id },
-    });
-  }
+  await seedAtlasTemplates(hrUser.id);
   // Fake vacations and document requests have been removed for a clean slate.
 
-  const documentSeeds = [
-    { title: 'Contrat CDI Nadia Amrani', documentType: 'Contrat', category: 'Contrats', filePath: 'hr-documents/contrat-nadia-amrani.txt', content: 'Contrat CDI de Nadia Amrani. Document privé employé.', employeeId: collab.id, isPublic: false, visibility: 'EMPLOYEE_PRIVATE' as const },
-    { title: 'Bulletin de paie Mai 2026', documentType: 'Bulletin de paie', category: 'Paie', filePath: 'hr-documents/bulletin-mai-2026.txt', content: 'Bulletin de paie de mai 2026. Document privé employé.', employeeId: collab.id, isPublic: false, visibility: 'EMPLOYEE_PRIVATE' as const },
-    { title: 'Règlement intérieur Maroc 2026', documentType: 'Politique', category: 'Politiques', filePath: 'hr-documents/reglement-interieur-maroc-2026.txt', content: 'Règlement intérieur 2026. Respect, sécurité, confidentialité et égalité professionnelle.', isPublic: true, visibility: 'PUBLIC' as const },
-    { title: 'Guide congés et absences', documentType: 'Procédure', category: 'Procédures', filePath: 'hr-documents/guide-conges-absences.txt', content: 'Les demandes de congés doivent être soumises dans le portail. Un justificatif est requis pour un congé maladie.', isPublic: true, visibility: 'PUBLIC' as const },
-  ];
-  for (const document of documentSeeds) {
-    const body = Buffer.from(document.content, 'utf8');
-    await uploadSeedObject(document.filePath, body, 'text/plain; charset=utf-8');
-    const storedDocument = await prisma.hrDocument.create({
-      data: {
-        uploadedBy: hrUser.id,
-        employeeId: document.employeeId,
-        title: document.title,
-        documentType: document.documentType,
-        category: document.category,
-        filePath: document.filePath,
-        sizeBytes: body.length,
-        fileType: 'TXT',
-        isPublic: document.isPublic,
-        visibility: document.visibility,
-        allowedRoles: [],
-        status: 'APPROVED',
-      },
-    });
-    await prisma.documentChunk.create({
-      data: {
-        documentId: storedDocument.id,
-        chunkText: document.content,
-        chunkOrder: 0,
-      },
-    });
-  }
-
-  const generatedSeed = Buffer.from('Attestation de travail de Nadia Amrani.', 'utf8');
-  await uploadSeedObject('generated/attestation-nadia-amrani.txt', generatedSeed, 'text/plain');
-  await prisma.generatedDocument.create({
-    data: {
-      employeeId: collab.id,
-      generatedBy: hrUser.id,
-      documentType: 'Attestation de travail',
-      filePath: 'generated/attestation-nadia-amrani.txt',
-      sizeBytes: generatedSeed.length,
-      fileType: 'TXT',
-      downloads: 0,
-      isPublic: false,
-      status: 'APPROVED',
-    },
-  });
+  await seedHrDemoDocuments(hrUser.id, collab.id);
 
   const onboardingRows = rows.filter((row) => row.onboardingState === 'ON');
   for (const row of onboardingRows) {

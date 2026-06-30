@@ -17,7 +17,7 @@ export class TemplatesController {
   findAll(@CurrentUser() user: any) {
     // HR and Admins can see all, employees only active
     const canSeeInactive = user.role === 'HR' || user.role === 'ADMIN';
-    return this.templatesService.findAll(canSeeInactive);
+    return this.templatesService.findAll(canSeeInactive, user.userId);
   }
 
   @Post()

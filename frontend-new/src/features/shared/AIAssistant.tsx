@@ -229,6 +229,16 @@ export function AIAssistant() {
                   ))}
                   {message.action ? (
                     <Box mt={3} bg="brand.50" p={3} borderRadius="14px" color="gray.800">
+                      {message.action.payload?.formData && typeof message.action.payload.formData === "object" ? (
+                        <Stack mb={3} spacing={1}>
+                          <Text fontSize="xs" fontWeight="900" color="gray.500">Informations capturées</Text>
+                          {Object.entries(message.action.payload.formData as Record<string, unknown>).map(([key, value]) => (
+                            <Text key={key} fontSize="sm">
+                              <Text as="span" fontWeight="800">{String((message.action?.payload?.formDataLabels as Record<string, unknown> | undefined)?.[key] ?? key).replace(/[[\]]/g, "")}</Text>: {String(value)}
+                            </Text>
+                          ))}
+                        </Stack>
+                      ) : null}
                       <Button as="label" size="sm" variant="outline">
                         Justificatif optionnel
                         <Input hidden type="file" onChange={(event) => setFiles((value) => ({ ...value, [message.action!.id]: event.target.files?.[0] }))} />

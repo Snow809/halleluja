@@ -1,22 +1,41 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { S3Service } from '../../services/storage/s3.service';
 import { UpdateTemplateDto } from './dto/update-template.dto';
+import { buildFieldSchema, normalizeTemplateFieldSchema } from './template-fields';
+import { TemplateDataService } from './template-data.service';
 
 @Injectable()
 export class TemplatesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
+    private readonly templateData: TemplateDataService,
   ) {}
 
-  async findAll(includeInactive = false) {
-    return this.prisma.documentTemplate.findMany({
+  async findAll(includeInactive = false, userId?: string) {
+    const employee = userId
+      ? await this.prisma.employee.findUnique({
+          where: { userId },
+          include: { department: true, position: true, manager: true },
+        })
+      : null;
+    const templates = await this.prisma.documentTemplate.findMany({
       where: includeInactive ? {} : { isActive: true },
       orderBy: { createdAt: 'desc' },
       include: {
         uploader: { select: { fullName: true, email: true } }
       }
+    });
+    return templates.map((template) => {
+      const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
+      return {
+        ...template,
+        fieldSchema,
+        requiredFields: fieldSchema.filter((field) => field.required),
+        missingDataHints: this.templateData.missingHints(fieldSchema, employee),
+      };
     });
   }
 
@@ -26,6 +45,7 @@ export class TemplatesService {
     const fileExtension = file.originalname.split('.').pop() || 'docx';
     const key = `templates/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExtension}`;
     
+    const fieldSchema = buildFieldSchema(file.buffer);
     await this.s3.uploadFile(key, file.buffer, file.mimetype);
 
     return this.prisma.documentTemplate.create({
@@ -39,6 +59,7 @@ export class TemplatesService {
         sizeBytes: file.size,
         fileType: fileExtension.toUpperCase(),
         isActive: true,
+        fieldSchema: fieldSchema as unknown as Prisma.InputJsonValue,
       }
     });
   }
@@ -47,13 +68,19 @@ export class TemplatesService {
     const template = await this.prisma.documentTemplate.findUnique({ where: { id } });
     if (!template) throw new NotFoundException('Template not found');
     let replacement:
-      | { filePath: string; sizeBytes: number; fileType: string }
+      | { filePath: string; sizeBytes: number; fileType: string; fieldSchema: Prisma.InputJsonValue }
       | undefined;
     if (file) {
       this.assertDocx(file);
+      const fieldSchema = buildFieldSchema(file.buffer);
       const key = `templates/${Date.now()}-${Math.random().toString(36).slice(2)}.docx`;
       await this.s3.uploadFile(key, file.buffer, file.mimetype);
-      replacement = { filePath: key, sizeBytes: file.size, fileType: 'DOCX' };
+      replacement = {
+        filePath: key,
+        sizeBytes: file.size,
+        fileType: 'DOCX',
+        fieldSchema: fieldSchema as unknown as Prisma.InputJsonValue,
+      };
     }
     const updated = await this.prisma.documentTemplate.update({
       where: { id },

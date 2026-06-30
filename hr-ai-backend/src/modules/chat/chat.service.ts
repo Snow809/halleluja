@@ -59,6 +59,24 @@ export class ChatService {
         history,
       );
       if (proposedAction) {
+        if ('followUp' in proposedAction) {
+          const answer = proposedAction.followUp;
+          await this.prisma.aiMessage.create({
+            data: {
+              conversationId: conversation.id,
+              role: 'ASSISTANT',
+              content: answer,
+              safetyStatus: 'ALLOWED',
+            },
+          });
+          await this.touchConversation(conversation.id);
+          return {
+            conversationId: conversation.id,
+            answer,
+            refused: false,
+            sources: [],
+          };
+        }
         const answer = this.actionProposalAnswer(intent.language, proposedAction.summary);
         await this.prisma.aiMessage.create({
           data: {
@@ -182,8 +200,8 @@ export class ChatService {
   }
 
   supervision(user: AuthenticatedUser) {
-    if (user.role !== 'ADMIN' && user.role !== 'HR') {
-      throw new ForbiddenException('AI supervision is restricted to HR and Admin');
+    if (user.role !== 'ADMIN') {
+      throw new ForbiddenException('AI supervision is restricted to Admin');
     }
     return this.prisma.aiMessage.findMany({
       where: { OR: [{ safetyStatus: 'BLOCKED' }, { role: 'ASSISTANT' }] },
@@ -212,8 +230,8 @@ export class ChatService {
   }
 
   async supervisionSummary(user: AuthenticatedUser) {
-    if (user.role !== 'ADMIN' && user.role !== 'HR') {
-      throw new ForbiddenException('AI supervision is restricted to HR and Admin');
+    if (user.role !== 'ADMIN') {
+      throw new ForbiddenException('AI supervision is restricted to Admin');
     }
     const since = new Date();
     since.setDate(since.getDate() - 6);

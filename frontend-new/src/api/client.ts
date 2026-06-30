@@ -62,10 +62,20 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retry 
 
   const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...init, headers });
   if (response.status === 401 && retry && session?.refreshToken) {
-    await refreshAccessToken();
-    return apiRequest<T>(path, init, false);
+    try {
+      await refreshAccessToken();
+      return apiRequest<T>(path, init, false);
+    } catch (error) {
+      clearSession();
+      window.dispatchEvent(new Event("session-expired"));
+      throw error;
+    }
   }
   const payload = await response.json().catch(() => ({}));
+  if (response.status === 401 && session) {
+    clearSession();
+    window.dispatchEvent(new Event("session-expired"));
+  }
   if (!response.ok) throw new ApiError(errorMessage(payload), response.status, payload);
   return (payload as ApiEnvelope<T>).data;
 }

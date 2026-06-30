@@ -55,7 +55,13 @@ export class GeneratedDocumentsController {
     return this.generatedDocumentsService.findAll(user);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.COLLABORATOR)
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.COLLABORATOR)
+  @Get(':id/preview')
+  preview(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.generatedDocumentsService.preview(id, user);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.COLLABORATOR)
   @Get(':id/download')
   download(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.generatedDocumentsService.download(id, user);

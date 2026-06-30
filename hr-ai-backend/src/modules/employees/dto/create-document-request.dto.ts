@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateDocumentRequestDto {
@@ -11,4 +11,9 @@ export class CreateDocumentRequestDto {
   @IsString()
   @IsOptional()
   note?: string;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsObject()
+  @IsOptional()
+  formData?: Record<string, unknown>;
 }

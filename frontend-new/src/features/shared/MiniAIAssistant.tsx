@@ -61,7 +61,7 @@ export function MiniAIAssistant({ onClose }: { onClose(): void }) {
             <Stack key={message.id} direction={message.role === "user" ? "row-reverse" : "row"}>
               <Box maxW="88%" p={3} borderRadius="16px" bg={message.role === "user" ? "brand.500" : "white"} color={message.role === "user" ? "white" : "gray.800"} borderWidth={message.role === "assistant" ? "1px" : 0} borderColor="app.border">
                 {message.role === "assistant" ? <MarkdownMessage content={message.content || "…"} /> : <Text>{message.content}</Text>}
-                {message.action ? <Stack mt={3}><Button as="label" size="sm" variant="outline">Justificatif optionnel<Input hidden type="file" onChange={(e) => setFiles((x) => ({ ...x, [message.action!.id]: e.target.files?.[0] }))} /></Button><HStack><Button size="sm" leftIcon={<Check size={15} />} onClick={() => void decide(message.action!, "confirm")}>Accepter</Button><Button size="sm" variant="outline" leftIcon={<X size={15} />} onClick={() => void decide(message.action!, "cancel")}>Annuler</Button></HStack></Stack> : null}
+                {message.action ? <Stack mt={3}>{message.action.payload?.formData && typeof message.action.payload.formData === "object" ? <Stack spacing={1}><Text fontSize="xs" fontWeight="900" color="gray.500">Informations capturées</Text>{Object.entries(message.action.payload.formData as Record<string, unknown>).map(([key, value]) => <Text key={key} fontSize="sm"><Text as="span" fontWeight="800">{String((message.action?.payload?.formDataLabels as Record<string, unknown> | undefined)?.[key] ?? key).replace(/[[\]]/g, "")}</Text>: {String(value)}</Text>)}</Stack> : null}<Button as="label" size="sm" variant="outline">Justificatif optionnel<Input hidden type="file" onChange={(e) => setFiles((x) => ({ ...x, [message.action!.id]: e.target.files?.[0] }))} /></Button><HStack><Button size="sm" leftIcon={<Check size={15} />} onClick={() => void decide(message.action!, "confirm")}>Accepter</Button><Button size="sm" variant="outline" leftIcon={<X size={15} />} onClick={() => void decide(message.action!, "cancel")}>Annuler</Button></HStack></Stack> : null}
               </Box>
             </Stack>
           ))}
@@ -73,4 +73,3 @@ export function MiniAIAssistant({ onClose }: { onClose(): void }) {
     </Box>
   );
 }
-

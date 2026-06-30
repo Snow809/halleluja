@@ -7,9 +7,10 @@ import { ChatActionService } from './chat-action.service';
 import { EmployeesModule } from '../employees/employees.module';
 import { OnboardingModule } from '../onboarding/onboarding.module';
 import { LlmModule } from '../../services/llm/llm.module';
+import { DocumentsModule } from '../documents/documents.module';
 
 @Module({
-  imports: [AuditModule, RagModule, EmployeesModule, OnboardingModule, LlmModule],
+  imports: [AuditModule, RagModule, EmployeesModule, OnboardingModule, LlmModule, DocumentsModule],
   controllers: [ChatController],
   providers: [ChatService, ChatActionService],
 })

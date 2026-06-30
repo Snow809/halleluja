@@ -4,6 +4,8 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { useAuth } from "./AuthContext";
 import { AppLayout } from "@/layouts/AppLayout";
 import { LoginPage } from "@/features/auth/LoginPage";
+import { MfaPage } from "@/features/auth/MfaPage";
+import { ConsentPage } from "@/features/auth/ConsentPage";
 
 const lazyNamed = <T extends Record<string, any>>(loader: () => Promise<T>, name: keyof T) =>
   lazy(async () => ({ default: (await loader())[name] }));
@@ -22,6 +24,7 @@ const DocumentLibrary = lazyNamed(() => import("@/features/hr/DocumentLibrary"),
 const RequestReview = lazyNamed(() => import("@/features/hr/RequestReview"), "RequestReview");
 const AISupervision = lazyNamed(() => import("@/features/hr/AISupervision"), "AISupervision");
 const HrInbox = lazyNamed(() => import("@/features/hr/HrInbox"), "HrInbox");
+const RightToErasure = lazyNamed(() => import("@/features/hr/RightToErasure"), "RightToErasure");
 const ManagerDashboard = lazyNamed(() => import("@/features/manager/ManagerDashboard"), "ManagerDashboard");
 const Team = lazyNamed(() => import("@/features/manager/Team"), "Team");
 const TeamRiskAlerts = lazyNamed(() => import("@/features/manager/TeamRiskAlerts"), "TeamRiskAlerts");
@@ -41,6 +44,7 @@ function ProtectedApp() {
   const { user, loading, shell } = useAuth();
   if (loading) return <ScreenLoader />;
   if (!user) return <Navigate to="/login" replace />;
+  if (!user.termsAccepted) return <Navigate to="/consent" replace />;
   if (!shell) return <Navigate to="/unsupported-role" replace />;
   return <AppLayout />;
 }
@@ -49,6 +53,7 @@ function HomeRedirect() {
   const { user, loading, shell } = useAuth();
   if (loading) return <ScreenLoader />;
   if (!user) return <Navigate to="/login" replace />;
+  if (!user.termsAccepted) return <Navigate to="/consent" replace />;
   return <Navigate to={`/${shell ?? "login"}/dashboard`} replace />;
 }
 
@@ -62,10 +67,12 @@ export function AppRouter() {
   return (
     <Suspense fallback={<ScreenLoader />}>
       <Routes>
+        <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/mfa" element={<MfaPage />} />
+        <Route path="/consent" element={<ConsentPage />} />
         <Route path="/unsupported-role" element={<Center minH="100vh"><Text>Rôle non pris en charge.</Text></Center>} />
         <Route element={<ProtectedApp />}>
-          <Route path="/" element={<HomeRedirect />} />
           <Route element={<RoleOnly role="employee" />}>
             <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
             <Route path="/employee/activities" element={<EmployeeActivities />} />
@@ -82,8 +89,8 @@ export function AppRouter() {
             <Route path="/hr/request-document" element={<RequestDocument />} />
             <Route path="/hr/documents" element={<DocumentLibrary />} />
             <Route path="/hr/requests" element={<RequestReview />} />
-            <Route path="/hr/ai-supervision" element={<AISupervision />} />
             <Route path="/hr/inbox" element={<HrInbox />} />
+            <Route path="/hr/right-to-erasure" element={<RightToErasure />} />
           </Route>
           <Route element={<RoleOnly role="manager" />}>
             <Route path="/manager/dashboard" element={<ManagerDashboard />} />
@@ -104,6 +111,7 @@ export function AppRouter() {
             <Route path="/admin/requests" element={<RequestReview />} />
             <Route path="/admin/ai-supervision" element={<AISupervision />} />
             <Route path="/admin/risks" element={<TeamRiskAlerts />} />
+            <Route path="/admin/right-to-erasure" element={<RightToErasure />} />
           </Route>
           <Route path="/assistant" element={<AIAssistant />} />
           <Route path="/profile" element={<Profile />} />

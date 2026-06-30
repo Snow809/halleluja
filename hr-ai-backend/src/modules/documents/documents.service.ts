@@ -105,6 +105,19 @@ export class DocumentsService {
       url: await this.s3.getPresignedUrl(document.filePath, 300),
       fileName: `${document.title}.${document.fileType.toLowerCase()}`,
       fileType: document.fileType,
+      previewable: document.fileType.toUpperCase() === 'PDF',
+    };
+  }
+
+  async getPreview(id: string, user: AuthenticatedUser) {
+    const document = await this.findOne(id, user);
+    if (document.status !== 'APPROVED') throw new NotFoundException('Document not available');
+    const previewable = document.fileType.toUpperCase() === 'PDF';
+    return {
+      url: previewable ? await this.s3.getPresignedUrl(document.filePath, 300) : null,
+      fileName: `${document.title}.${document.fileType.toLowerCase()}`,
+      fileType: document.fileType,
+      previewable,
     };
   }
 

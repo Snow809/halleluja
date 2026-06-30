@@ -139,6 +139,12 @@ enum HrContactStatus {
   RESOLVED
 }
 
+enum DataErasureStatus {
+  PENDING
+  APPROVED_FOR_FUTURE_PURGE
+  CANCELLED
+}
+
 model User {
   id           String          @id @default(cuid())
   email        String          @unique
@@ -148,6 +154,11 @@ model User {
   settings     Json            @default("{}")
   accountStatus AccountStatus  @default(ACTIVE)
   onboardingState OnboardingState @default(OFF)
+  mfaSecret    String?
+  mfaEnabled   Boolean         @default(false)
+  termsAcceptedAt DateTime?
+  termsVersion String?
+  consents     Json            @default("{}")
   lastLoginAt  DateTime?
   createdAt    DateTime        @default(now())
   roles        UserRole[]
@@ -164,6 +175,8 @@ model User {
   aiActionDrafts AiActionDraft[]
   notifications Notification[]
   contactRequests HrContactRequest[]
+  erasureRequests DataErasureRequest[] @relation("ErasureRequester")
+  erasureReviews DataErasureRequest[] @relation("ErasureReviewer")
 }
 
 model Role {
@@ -231,6 +244,10 @@ model Employee {
   phone          String?
   location       String?
   address        String?
+  cinNumber      String?
+  cnssNumber     String?
+  insuranceCompany String?
+  insurancePolicyNumber String?
   skills         String[]            @default([])
   presenceScore  Int                 @default(92)
   performanceScore Int               @default(80)
@@ -253,6 +270,7 @@ model Employee {
   workflowTasks  WorkflowTask[]      @relation("WorkflowEmployee")
   assignedTasks  WorkflowTask[]      @relation("WorkflowAssignee")
   riskAlerts     EmployeeRiskAlert[]
+  erasureRequests DataErasureRequest[]
 }
 
 model DocumentTemplate {
@@ -267,6 +285,7 @@ model DocumentTemplate {
   fileType     String         @default("DOCX")
   downloads    Int            @default(0)
   isActive     Boolean        @default(true)
+  fieldSchema  Json           @default("[]")
   createdAt    DateTime       @default(now())
   uploader     User           @relation("TemplateUploader", fields: [uploadedBy], references: [id])
   requests     HrRequest[]
@@ -298,6 +317,7 @@ model HrRequest {
   priority    HrRequestPriority @default(NORMAL)
   status      HrRequestStatus   @default(PENDING)
   note        String?
+  formData    Json             @default("{}")
   comment     String?
   reviewedBy  String?
   reviewedAt  DateTime?
@@ -319,6 +339,8 @@ model GeneratedDocument {
   validatedBy  String?
   documentType String
   filePath     String
+  clearFilePath String?
+  anonymizedFilePath String?
   sizeBytes    Int             @default(0)
   fileType     String          @default("TXT")
   downloads    Int             @default(0)
@@ -523,4 +545,22 @@ model HrContactRequest {
   user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
+}
+
+model DataErasureRequest {
+  id          String            @id @default(cuid())
+  employeeId  String
+  requesterId String
+  reviewerId  String?
+  reason      String
+  notes       String?
+  status      DataErasureStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+  reviewedAt  DateTime?
+  employee    Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  requester   User              @relation("ErasureRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  reviewer    User?             @relation("ErasureReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([employeeId, status])
 }

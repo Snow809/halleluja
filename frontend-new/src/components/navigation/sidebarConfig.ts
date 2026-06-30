@@ -1,5 +1,20 @@
 import type { LucideIcon } from "lucide-react";
-import { Bot, BriefcaseBusiness, CalendarDays, FileText, FolderOpen, Gauge, HeartPulse, Inbox, Library, Map, Settings, ShieldCheck, Users } from "lucide-react";
+import {
+  Bot,
+  BriefcaseBusiness,
+  CalendarDays,
+  FileText,
+  FolderOpen,
+  Gauge,
+  HeartPulse,
+  Inbox,
+  Library,
+  Map,
+  Settings,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react";
 import type { AppShell } from "@/api/types";
 
 export type SidebarEntry = { label: string; to: string; icon: LucideIcon; group?: string };
@@ -21,8 +36,8 @@ export const sidebarByShell: Record<AppShell, SidebarEntry[]> = {
     { label: "Documents", to: "/hr/documents", icon: Library },
     { label: "Demandes", to: "/hr/requests", icon: FileText },
     { label: "Boîte RH", to: "/hr/inbox", icon: Inbox },
-    { group: "IA", label: "Supervision IA", to: "/hr/ai-supervision", icon: ShieldCheck },
-    { label: "Assistant IA", to: "/assistant", icon: Bot },
+    { label: "Droit à l’oubli", to: "/hr/right-to-erasure", icon: Trash2 },
+    { group: "ARIA", label: "Assistant IA", to: "/assistant", icon: Bot },
     { group: "Compte", label: "Paramètres", to: "/settings", icon: Settings },
   ],
   manager: [
@@ -43,6 +58,7 @@ export const sidebarByShell: Record<AppShell, SidebarEntry[]> = {
     { label: "Documents", to: "/admin/documents", icon: Library },
     { label: "Demandes", to: "/admin/requests", icon: FileText },
     { label: "Risques QVT", to: "/admin/risks", icon: HeartPulse },
+    { label: "Droit à l’oubli", to: "/admin/right-to-erasure", icon: Trash2 },
     { group: "IA", label: "Supervision IA", to: "/admin/ai-supervision", icon: ShieldCheck },
     { label: "Assistant IA", to: "/assistant", icon: Bot },
     { group: "Compte", label: "Paramètres", to: "/settings", icon: Settings },
@@ -60,4 +76,3 @@ export function shellLabel(shell?: AppShell | null) {
 export function shellHome(shell?: AppShell | null) {
   return shell ? `/${shell}/dashboard` : "/";
 }
-

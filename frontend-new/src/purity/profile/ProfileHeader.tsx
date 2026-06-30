@@ -47,11 +47,13 @@ export function ProfileHeader({ backgroundHeader, avatarImage, name, email, subt
           bgSize="cover"
           filter="hue-rotate(42deg) saturate(1.28)"
           opacity={0.44}
+          borderRadius="25px"
         />
         <Box
           position="absolute"
           inset={0}
           bg="linear-gradient(135deg, rgba(47, 118, 223, 0.42), rgba(31, 95, 196, 0.2) 55%, rgba(134, 184, 255, 0.32))"
+          borderRadius="25px"
         />
         <Flex
           direction={{ base: "column", md: "row" }}

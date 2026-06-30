@@ -1,10 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Readable } from 'stream';
 import { PrismaService } from '../../database/prisma.service';
 import { S3Service } from '../../services/storage/s3.service';
-import * as PizZip from 'pizzip';
-import * as Docxtemplater from 'docxtemplater';
-import { Readable } from 'stream';
 import { NotificationsService } from '../notifications/notifications.service';
+import { DocumentPdfService } from './document-pdf.service';
+import { TemplateDataService } from './template-data.service';
+import { normalizeTemplateFieldSchema, replaceBracketLabelsWithDocxtemplaterTags } from './template-fields';
 
 @Injectable()
 export class GenerationService {
@@ -14,12 +15,14 @@ export class GenerationService {
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
     private readonly notifications: NotificationsService,
+    private readonly documentPdf: DocumentPdfService,
+    private readonly templateData: TemplateDataService,
   ) {}
 
   private async streamToBuffer(stream: Readable): Promise<Buffer> {
-    const chunks = [];
+    const chunks: Buffer[] = [];
     for await (const chunk of stream) {
-      chunks.push(chunk);
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     return Buffer.concat(chunks);
   }
@@ -30,7 +33,7 @@ export class GenerationService {
       include: {
         employee: { include: { department: true, position: true, manager: true } },
         template: true,
-      }
+      },
     });
 
     if (!request || !request.template || request.kind !== 'DOCUMENT') {
@@ -38,55 +41,78 @@ export class GenerationService {
     }
 
     try {
-      // 1. Fetch template from S3
       const templateStream = await this.s3.getFileStream(request.template.filePath);
       const templateBuffer = await this.streamToBuffer(templateStream as Readable);
+      const fieldSchema = normalizeTemplateFieldSchema(request.template.fieldSchema);
 
-      // 2. Load into Docxtemplater
-      const zip = new PizZip(templateBuffer);
-      const doc = new Docxtemplater(zip, {
-        paragraphLoop: true,
-        linebreaks: true,
-      });
-
-      // 3. Prepare variables
-      const data = {
+      const legacyData = {
         employee_name: `${request.employee.firstName} ${request.employee.lastName}`,
+        employee_email: request.employee.email,
+        employee_phone: request.employee.phone || '',
+        employee_address: request.employee.address || '',
+        employee_number: request.employee.employeeNumber,
         employee_position: request.employee.position?.title || 'Employé',
         department: request.employee.department?.name || 'Non assigné',
-        manager_name: request.employee.manager ? `${request.employee.manager.firstName} ${request.employee.manager.lastName}` : 'Direction',
+        manager_name: request.employee.manager
+          ? `${request.employee.manager.firstName} ${request.employee.manager.lastName}`
+          : 'Direction',
+        hire_date: request.employee.hireDate.toLocaleDateString('fr-FR'),
+        salary: request.employee.salary?.toString() || '',
+        request_note: request.note || '',
         date: new Date().toLocaleDateString('fr-FR'),
       };
+      const data =
+        fieldSchema.length > 0
+          ? this.templateData.assertComplete(fieldSchema, request.employee, request.formData)
+          : legacyData;
+      const renderBuffer =
+        fieldSchema.length > 0
+          ? replaceBracketLabelsWithDocxtemplaterTags(templateBuffer, fieldSchema)
+          : templateBuffer;
 
-      // 4. Render document
-      doc.render(data);
-      const generatedBuffer = doc.getZip().generate({
-        type: 'nodebuffer',
-        compression: 'DEFLATE',
-      });
+      const clearDocx = this.documentPdf.renderDocx(renderBuffer, data);
+      const anonymizedDocx = this.documentPdf.renderDocx(
+        renderBuffer,
+        await this.documentPdf.anonymizeData(data),
+      );
+      const clearPdf = await this.documentPdf.convertDocxToPdf(
+        clearDocx,
+        `${request.template.documentType}-clear.docx`,
+      );
+      const anonymizedPdf = await this.documentPdf.convertDocxToPdf(
+        anonymizedDocx,
+        `${request.template.documentType}-anonymized.docx`,
+      );
 
-      // 5. Upload to S3
-      const key = `generated/${request.employeeId}-${Date.now()}.docx`;
-      await this.s3.uploadFile(key, generatedBuffer, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      const stamp = Date.now();
+      const clearKey = `generated/clear/${request.employeeId}-${stamp}.pdf`;
+      const anonymizedKey = `generated/anonymized/${request.employeeId}-${stamp}.pdf`;
+      await this.s3.uploadFile(clearKey, clearPdf, 'application/pdf');
+      await this.s3.uploadFile(anonymizedKey, anonymizedPdf, 'application/pdf');
 
-      // 6. Save record
-      await this.prisma.generatedDocument.create({
+      const generatedBy = request.reviewedBy || request.employee.userId;
+      if (!generatedBy) {
+        throw new Error('No user is available to own generated document audit metadata');
+      }
+
+      const generated = await this.prisma.generatedDocument.create({
         data: {
           employeeId: request.employeeId,
-          generatedBy: request.reviewedBy || request.employee.userId || 'system',
+          generatedBy,
           validatedBy: request.reviewedBy,
           documentType: request.template.documentType,
-          filePath: key,
-          sizeBytes: generatedBuffer.length,
-          fileType: 'DOCX',
+          filePath: anonymizedKey,
+          clearFilePath: clearKey,
+          anonymizedFilePath: anonymizedKey,
+          sizeBytes: anonymizedPdf.length,
+          fileType: 'PDF',
           status: 'APPROVED',
-        }
+        },
       });
 
-      // Update request to reflect completion
       await this.prisma.hrRequest.update({
         where: { id: requestId },
-        data: { note: 'Document generated successfully' }
+        data: { note: 'Document generated successfully' },
       });
 
       if (request.employee.userId) {
@@ -96,11 +122,12 @@ export class GenerationService {
           title: 'Document disponible',
           message: `${request.template.title} est prêt au téléchargement.`,
           resourceType: 'GeneratedDocument',
-          resourceId: requestId,
+          resourceId: generated.id,
         });
       }
 
       this.logger.log(`Document generated for request ${requestId}`);
+      return generated;
     } catch (error) {
       this.logger.error(`Generation failed for request ${requestId}`, error);
       throw error;

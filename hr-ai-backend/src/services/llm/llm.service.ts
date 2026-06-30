@@ -27,6 +27,7 @@ export interface DetectedSelfServiceAction {
   reason?: string;
   templateId?: string;
   note?: string;
+  formData?: Record<string, unknown>;
 }
 
 export type ChatIntent =
@@ -276,6 +277,13 @@ export class LlmService {
       title: string;
       documentType: string;
       description?: string | null;
+      requiredFields?: Array<{
+        key: string;
+        label: string;
+        source: string;
+        inputType?: string;
+        aliases?: string[];
+      }>;
     }>;
     currentDate: string;
   }): Promise<DetectedSelfServiceAction> {
@@ -295,8 +303,10 @@ export class LlmService {
             'Sick leave is supported. Set leaveType to "Congé maladie". A medical certificate is optional.',
             'Use recent conversation history to resolve follow-ups such as "submit it", "do it", or "dépose mon congé", including dates and leave type stated earlier.',
             'For document requests, templateId must exactly equal one supplied template ID.',
+            'For document requests, extract any template-specific field values from the message and recent conversation into formData using the provided field keys.',
+            'Examples: insurer/company names, policy numbers, reference years, IR/tax amounts, exit dates, and exit reasons belong in formData when the selected template asks for them.',
             'Return only one JSON object with this shape:',
-            '{"type":"NONE|CREATE_LEAVE_REQUEST|CREATE_DOCUMENT_REQUEST","leaveType":"string?","startDate":"YYYY-MM-DD?","endDate":"YYYY-MM-DD?","reason":"string?","templateId":"string?","note":"string?"}',
+            '{"type":"NONE|CREATE_LEAVE_REQUEST|CREATE_DOCUMENT_REQUEST","leaveType":"string?","startDate":"YYYY-MM-DD?","endDate":"YYYY-MM-DD?","reason":"string?","templateId":"string?","note":"string?","formData":{"fieldKey":"value"}?}',
             'Do not include Markdown or explanatory text.',
           ].join(' '),
         },
