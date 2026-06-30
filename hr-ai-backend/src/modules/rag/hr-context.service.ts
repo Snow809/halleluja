@@ -33,7 +33,7 @@ export class HrContextService {
       return this.buildAggregateContext(user, topic);
     }
 
-    if (topic === 'wellbeing-aggregate') {
+    if (topic === 'wellbeing-aggregate' && !this.hasIndividualReference(normalized)) {
       if (!this.accessPolicy.canUseOrganizationAggregates(user.role)) {
         return { handled: true, refused: true, reason: 'Organization analytics are not available for your role.' };
       }
@@ -171,7 +171,7 @@ export class HrContextService {
         ? 'salary'
         : topic === 'documents'
           ? 'documents'
-          : topic === 'performance'
+          : topic === 'performance' || topic === 'wellbeing-aggregate'
             ? 'wellbeing'
             : 'profile';
     const allowed = await this.accessPolicy.canAccessEmployee(user, target.id, policyTopic);
@@ -244,11 +244,37 @@ export class HrContextService {
         data = { employee: name, onboardingTasks: employee.workflowTasks };
         break;
       case 'performance':
+      case 'wellbeing-aggregate':
         data = {
           employee: name,
+          department: employee.department?.name,
+          position: employee.position?.title,
+          manager: employee.manager
+            ? `${employee.manager.firstName} ${employee.manager.lastName}`
+            : null,
           engagementScore: employee.engagementScore,
           presenceScore: employee.presenceScore,
           performanceScore: employee.performanceScore,
+          recentAbsences: employee.absences.map((absence) => ({
+            type: absence.absenceType,
+            status: absence.status,
+            startDate: absence.startDate,
+            endDate: absence.endDate,
+            durationDays: Number(absence.durationDays),
+          })),
+          approvedAbsenceDaysInRecentHistory: employee.absences
+            .filter((absence) => absence.status === 'APPROVED')
+            .reduce((sum, absence) => sum + Number(absence.durationDays), 0),
+          recentLeaveRequests: employee.requests
+            .filter((request) => request.kind === 'VACATION')
+            .map((request) => ({
+              type: request.requestType,
+              status: request.status,
+              startDate: request.startDate,
+              endDate: request.endDate,
+              durationDays: request.durationDays ? Number(request.durationDays) : null,
+              createdAt: request.createdAt,
+            })),
         };
         break;
       default:
@@ -321,6 +347,7 @@ export class HrContextService {
     const asksPendingOnly = /\b(pending|attente|en attente|approval|approbation|valider|valide|refuser|refuse|review|approve)\b/.test(normalizedQuestion);
     const asksReviewQueue = /\b(valider|valide|refuser|refuse|review|approve|approval|approbation|a traiter|traiter)\b/.test(normalizedQuestion);
     const asksOwnScope = /\b(my|mine|me|for me|own|mon|ma|mes|moi|pour moi|a moi|je)\b/.test(normalizedQuestion);
+    const asksExplicitOwnEmployeeFile = /\b(my own|own request|own requests|mes propres|ma propre|mon propre|mes conges|mes absences|mes demandes personnelles|demandes personnelles)\b/.test(normalizedQuestion);
     const statusFilter = asksPendingOnly ? { status: 'PENDING' as const } : {};
 
     if (!actor && !this.accessPolicy.isGlobalHr(user.role)) {
@@ -367,14 +394,13 @@ export class HrContextService {
           })
         : [];
 
+    const canReview = this.accessPolicy.isGlobalHr(user.role) || user.role === 'MANAGER';
     const primaryScope =
-      asksReviewQueue && (this.accessPolicy.isGlobalHr(user.role) || user.role === 'MANAGER')
+      canReview && !asksExplicitOwnEmployeeFile && (asksReviewQueue || asksPendingOnly || asksOwnScope)
         ? 'review_queue'
-        : asksOwnScope
+        : asksOwnScope || asksExplicitOwnEmployeeFile || !canReview
           ? 'own_requests'
-          : this.accessPolicy.isGlobalHr(user.role) || user.role === 'MANAGER'
-            ? 'review_queue'
-            : 'own_requests';
+          : 'review_queue';
 
     return {
       handled: true,
@@ -405,7 +431,7 @@ export class HrContextService {
                 }
               : null,
           instruction:
-            'Answer from these live HR request counts only. If the user asks for a number, give the relevant count first. Use a compact Markdown table when listing requests.',
+            'Answer from these live HR request counts only. If requestQuestionScope is review_queue, answer from reviewQueue, not ownRequests. If requestQuestionScope is own_requests, answer from ownRequests. If the user asks for a number, give the relevant count first. Use a compact Markdown table when listing requests.',
         },
         null,
         2,
@@ -477,7 +503,11 @@ export class HrContextService {
     if (/\b(salary|salaries|salary grid|pay band|salaire|salaires|grille salariale|paie|compensation|earn|earns|make|makes|gagne|راتب)\b/.test(question)) return 'salary';
     if (/\b(manager|managers|team|teams|team size|direct reports|org chart|organization chart|reporting line|equipe|equipes|organigramme|hierarchie)\b/.test(question)) return 'organization';
     if (/\b(headcount|effectif|nombre d.employ|workforce)\b/.test(question)) return 'headcount';
-    if (/\b(absenteeism|absenteisme|engagement global|presence globale|wellbeing|bien.etre)\b/.test(question)) return 'wellbeing-aggregate';
+    if (/\b(absenteeism|absenteisme|engagement|presence|wellbeing|bien.etre)\b/.test(question)) {
+      return /\b(global|globale|organisation|organization|entreprise|company|equipe|team|department|departement|overall|moyenne)\b/.test(question)
+        ? 'wellbeing-aggregate'
+        : 'performance';
+    }
     if (/\b(vacation|leave|conge|conges|rtt|absence|absences|solde)\b/.test(question)) return 'leave';
     if (/\b(request|requests|demande|demandes|approval|approbation|pending|attente|valider|refuser|approve|review)\b/.test(question)) return 'requests';
     if (/\b(document|documents|attestation|bulletin|certificate|certificat)\b/.test(question)) return 'documents';
@@ -485,6 +515,13 @@ export class HrContextService {
     if (/\b(performance|engagement|presence|score|rendement)\b/.test(question)) return 'performance';
     if (/\b(profile|profil|department|departement|position|poste|manager|skills|competences|employee|employe)\b/.test(question)) return 'profile';
     return null;
+  }
+
+  private hasIndividualReference(question: string) {
+    if (/\b(my|mine|mon|ma|mes|moi|je|me|elle|lui|he|she|her|him|cette employee|cet employe|cette employe|this employee|this person|herself|himself|sur elle|sur lui|about her|about him)\b/.test(question)) {
+      return true;
+    }
+    return false;
   }
 
   private looksLikeCompanyDocumentQuestion(question: string) {
