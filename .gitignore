@@ -23,5 +23,4 @@ Thumbs.db
 
 # Local QVT ML data/artifacts
 hr-ai-backend/ml/data/
-hr-ai-backend/ml/artifacts/
 hr-ai-backend/ml/.venv/

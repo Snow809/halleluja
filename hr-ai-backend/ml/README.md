@@ -2,10 +2,11 @@
 
 This folder is intentionally local-first.
 
-Do not commit Kaggle datasets, virtual environments, or trained model artifacts unless the project owner explicitly decides to version demo assets. The repository `.gitignore` excludes:
+The repository keeps the lightweight training code and committed demo model artifacts so a fresh clone can show QVT predictions immediately.
+
+Do not commit Kaggle datasets or virtual environments. The repository `.gitignore` excludes:
 
 - `ml/data/`
-- `ml/artifacts/`
 - `ml/.venv/`
 
 ## Expected local files
@@ -35,7 +36,7 @@ The script writes:
 - `ml/artifacts/disengagement-model.joblib`
 - `ml/artifacts/qvt-model-metadata.json`
 
-The metadata includes validation MAE/R² for several scikit-learn tabular models and the selected model for each target.
+The metadata includes validation MAE/R² for several scikit-learn tabular models and the selected model for each target. If you retrain locally, commit updated artifacts only when you want the shared demo model to change.
 
 ## Current product behavior
 

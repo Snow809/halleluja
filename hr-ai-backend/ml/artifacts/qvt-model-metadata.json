@@ -1,0 +1,50 @@
+{
+  "modelVersion": "local-qvt-sklearn-2",
+  "trainedAt": "2026-06-30T21:26:43.277230+00:00",
+  "note": "Local demo training. Backend aggregation remains privacy-preserving and must not expose individual predictions.",
+  "burnout": {
+    "selectedModel": "random_forest",
+    "validation": [
+      {
+        "model": "random_forest",
+        "mae": 0.04695,
+        "r2": 0.90611
+      },
+      {
+        "model": "extra_trees",
+        "mae": 0.04789,
+        "r2": 0.9016
+      },
+      {
+        "model": "gradient_boosting",
+        "mae": 0.04871,
+        "r2": 0.8987
+      }
+    ]
+  },
+  "disengagement": {
+    "selectedModel": "extra_trees",
+    "validation": [
+      {
+        "model": "random_forest",
+        "mae": 0.13585,
+        "r2": 0.46858
+      },
+      {
+        "model": "extra_trees",
+        "mae": 0.13285,
+        "r2": 0.48432
+      },
+      {
+        "model": "gradient_boosting",
+        "mae": 0.14326,
+        "r2": 0.41956
+      }
+    ],
+    "targetColumn": "satisfaction_level"
+  },
+  "sources": [
+    "kaggle:blurredmachine/are-your-employees-burning-out",
+    "kaggle employee engagement/satisfaction or attrition dataset"
+  ]
+}
