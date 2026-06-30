@@ -8,9 +8,10 @@ import { EmployeesModule } from '../employees/employees.module';
 import { OnboardingModule } from '../onboarding/onboarding.module';
 import { LlmModule } from '../../services/llm/llm.module';
 import { DocumentsModule } from '../documents/documents.module';
+import { RedisModule } from '../../common/redis/redis.module';
 
 @Module({
-  imports: [AuditModule, RagModule, EmployeesModule, OnboardingModule, LlmModule, DocumentsModule],
+  imports: [AuditModule, RagModule, EmployeesModule, OnboardingModule, LlmModule, DocumentsModule, RedisModule],
   controllers: [ChatController],
   providers: [ChatService, ChatActionService],
 })

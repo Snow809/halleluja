@@ -236,7 +236,7 @@ export function AIAssistant() {
                           <Text fontSize="xs" fontWeight="900" color="gray.500">Informations capturées</Text>
                           {Object.entries(message.action.payload.formData as Record<string, unknown>).map(([key, value]) => (
                             <Text key={key} fontSize="sm">
-                              <Text as="span" fontWeight="800">{String((message.action?.payload?.formDataLabels as Record<string, unknown> | undefined)?.[key] ?? key).replace(/[[\]]/g, "")}</Text>: {String(value)}
+                              <Text as="span" fontWeight="800">{String((message.action?.payload?.formDataLabels as Record<string, unknown> | undefined)?.[key] ?? key).replace(/[[\]]/g, "")}</Text>: {value === true ? "fourni (sensible)" : String(value)}
                             </Text>
                           ))}
                         </Stack>

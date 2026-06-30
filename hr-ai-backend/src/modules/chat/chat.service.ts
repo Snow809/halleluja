@@ -59,6 +59,12 @@ export class ChatService {
         history,
       );
       if (proposedAction) {
+        if (proposedAction.redactedUserContent && proposedAction.redactedUserContent !== dto.question) {
+          await this.prisma.aiMessage.update({
+            where: { id: userMessage.id },
+            data: { content: proposedAction.redactedUserContent },
+          });
+        }
         if ('followUp' in proposedAction) {
           const answer = proposedAction.followUp;
           await this.prisma.aiMessage.create({
@@ -77,6 +83,7 @@ export class ChatService {
             sources: [],
           };
         }
+        const { redactedUserContent: _redactedUserContent, ...publicAction } = proposedAction;
         const answer = this.actionProposalAnswer(intent.language, proposedAction.summary);
         await this.prisma.aiMessage.create({
           data: {
@@ -92,7 +99,7 @@ export class ChatService {
           answer,
           refused: false,
           sources: [],
-          proposedAction,
+          proposedAction: publicAction,
         };
       }
       return this.storeAssistantText(

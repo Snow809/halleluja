@@ -12,6 +12,7 @@ import { EmployeesService } from '../employees/employees.service';
 import { OnboardingService } from '../onboarding/onboarding.service';
 import { AuditService } from '../audit/audit.service';
 import { LlmMessage, LlmService } from '../../services/llm/llm.service';
+import { RedisService } from '../../common/redis/redis.service';
 import { TemplateDataService } from '../documents/template-data.service';
 import {
   normalizeTemplateFieldSchema,
@@ -27,8 +28,18 @@ type ActionProposal =
       summary: string;
       payload: Record<string, unknown>;
       expiresAt: Date;
+      redactedUserContent?: string;
     }
-  | { followUp: string };
+  | { followUp: string; redactedUserContent?: string };
+
+interface PendingDocumentDraft {
+  templateId: string;
+  note?: string;
+  formData: Record<string, string>;
+  updatedAt: string;
+}
+
+const ACTION_TTL_SECONDS = 15 * 60;
 
 @Injectable()
 export class ChatActionService {
@@ -38,6 +49,7 @@ export class ChatActionService {
     private readonly onboardingService: OnboardingService,
     private readonly auditService: AuditService,
     private readonly llmService: LlmService,
+    private readonly redisService: RedisService,
     private readonly templateData: TemplateDataService = new TemplateDataService(),
   ) {}
 
@@ -84,16 +96,22 @@ export class ChatActionService {
           await this.validateLeaveRequest(user, payload);
           result = await this.employeesService.createVacationRequest(user.email, payload, attachment);
           break;
-        case 'CREATE_DOCUMENT_REQUEST':
+        case 'CREATE_DOCUMENT_REQUEST': {
+          const transientPayload = await this.redisService.getJson<{ formData?: Record<string, unknown> }>(
+            this.actionTransientKey(id),
+          );
+          if (!transientPayload?.formData) {
+            throw new ConflictException(
+              'Les informations sensibles temporaires ont expiré. Relancez la demande depuis ARIA.',
+            );
+          }
           result = await this.employeesService.createDocumentRequest(user.userId, {
             templateId: String(payload.templateId),
             note: payload.note ? String(payload.note) : undefined,
-            formData:
-              payload.formData && typeof payload.formData === 'object'
-                ? (payload.formData as Record<string, unknown>)
-                : undefined,
+            formData: transientPayload.formData,
           });
           break;
+        }
         case 'REVIEW_HR_REQUEST':
           await this.assertCanReview(String(payload.requestId), user);
           result = await this.employeesService.updateRequestStatus(
@@ -130,6 +148,7 @@ export class ChatActionService {
         'SUCCESS',
         { actionType: draft.actionType },
       );
+      await this.redisService.delete(this.actionTransientKey(id));
       return updated;
     } catch (error) {
       await this.prisma.aiActionDraft.update({
@@ -139,6 +158,7 @@ export class ChatActionService {
           result: { error: error instanceof Error ? error.message : 'Action failed' },
         },
       });
+      await this.redisService.delete(this.actionTransientKey(id));
       throw error;
     }
   }
@@ -149,6 +169,7 @@ export class ChatActionService {
       data: { status: 'CANCELLED' },
     });
     if (result.count === 0) throw new NotFoundException('Pending action draft not found');
+    await this.redisService.delete(this.actionTransientKey(id));
     return { id, status: 'CANCELLED' };
   }
 
@@ -168,9 +189,24 @@ export class ChatActionService {
         fieldSchema: true,
       },
     });
+    const pendingDraft = await this.redisService.getJson<PendingDocumentDraft>(
+      this.pendingDocumentDraftKey(conversationId, user.userId),
+    );
+    const detectorHistory = pendingDraft
+      ? [
+          ...history,
+          {
+            role: 'assistant' as const,
+            content:
+              `Pending secure document request: templateId=${pendingDraft.templateId}; ` +
+              `already provided transient field keys=${Object.keys(pendingDraft.formData).join(', ') || 'none'}. ` +
+              'Do not reveal values; use this only to resolve the next follow-up.',
+          },
+        ]
+      : history;
     const detected = await this.llmService.detectSelfServiceAction({
       question,
-      history,
+      history: detectorHistory,
       templates: templates.map((template) => {
         const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
         return {
@@ -193,13 +229,16 @@ export class ChatActionService {
     });
     if (detected.type === 'NONE') return null;
     if (detected.type === 'CREATE_DOCUMENT_REQUEST') {
-      const template = templates.find((item) => item.id === detected.templateId);
+      const templateId = detected.templateId || pendingDraft?.templateId;
+      const template = templates.find((item) => item.id === templateId);
       if (!template) return null;
       const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
-      const formData = sanitizeFormData(detected.formData);
-      const transientFields = fieldSchema.filter(
-        (field) => field.required && (field.storagePolicy === 'TRANSIENT_ONLY' || field.sensitive) && field.source === 'REQUEST',
-      );
+      const currentFormData = sanitizeFormData(detected.formData);
+      const formData = {
+        ...(pendingDraft?.templateId === template.id ? pendingDraft.formData : {}),
+        ...currentFormData,
+      };
+      const redactedUserContent = this.redactSensitiveValues(question, currentFormData);
       if (fieldSchema.length > 0) {
         const employee = await this.prisma.employee.findUnique({
           where: { userId: user.userId },
@@ -210,20 +249,23 @@ export class ChatActionService {
         }
         const { missingFields } = this.templateData.resolve(fieldSchema, employee, formData);
         if (missingFields.length > 0) {
-          return { followUp: this.documentMissingFieldsQuestion(template.title, missingFields) };
-        }
-        const providedTransient = transientFields.filter((field) => formData[field.key]);
-        if (providedTransient.length > 0) {
+          await this.redisService.setJson(
+            this.pendingDocumentDraftKey(conversationId, user.userId),
+            {
+              templateId: template.id,
+              note: detected.note || pendingDraft?.note,
+              formData,
+              updatedAt: new Date().toISOString(),
+            } satisfies PendingDocumentDraft,
+            ACTION_TTL_SECONDS,
+          );
           return {
-            followUp:
-              `Je peux identifier le modèle **${template.title}**, mais les champs sensibles (${providedTransient
-                .map((field) => field.label.replace(/[[\]]/g, ''))
-                .join(', ')}) ne doivent pas être stockés dans le chat. ` +
-              `Utilisez le formulaire sécurisé “Demande document” pour saisir ces valeurs et générer la demande sans les conserver en base.`,
+            followUp: this.documentMissingFieldsQuestion(template.title, missingFields),
+            redactedUserContent,
           };
         }
       }
-      return this.createDraft(
+      const proposal = await this.createDraft(
         conversationId,
         user.userId,
         'CREATE_DOCUMENT_REQUEST',
@@ -234,7 +276,10 @@ export class ChatActionService {
           formDataLabels: Object.fromEntries(fieldSchema.map((field) => [field.key, field.label])),
         },
         `Préparer la demande de document "${template.title}"`,
+        { formData },
       );
+      await this.redisService.delete(this.pendingDocumentDraftKey(conversationId, user.userId));
+      return { ...proposal, redactedUserContent };
     }
     if (!detected.startDate || !detected.endDate) return null;
     const startDate = new Date(`${detected.startDate}T00:00:00`);
@@ -313,6 +358,7 @@ export class ChatActionService {
     actionType: AiActionType,
     payload: Record<string, unknown>,
     summary: string,
+    transientPayload?: Record<string, unknown>,
   ) {
     const expiresAt = new Date(Date.now() + 15 * 60_000);
     const draft = await this.prisma.aiActionDraft.create({
@@ -324,6 +370,13 @@ export class ChatActionService {
         expiresAt,
       },
     });
+    if (transientPayload) {
+      await this.redisService.setJson(
+        this.actionTransientKey(draft.id),
+        transientPayload,
+        ACTION_TTL_SECONDS,
+      );
+    }
     return {
       id: draft.id,
       type: actionType,
@@ -421,6 +474,23 @@ export class ChatActionService {
 
   private documentMissingFieldsQuestion(templateTitle: string, fields: TemplateFieldDefinition[]) {
     const labels = fields.map((field) => `- ${field.label}`).join('\n');
-    return `Pour préparer **${templateTitle}**, il me manque ces informations :\n\n${labels}\n\nRépondez avec ces valeurs et je préparerai l'action à valider.`;
+    return `Pour préparer **${templateTitle}**, il me manque ces informations :\n\n${labels}\n\nRépondez avec ces valeurs et je préparerai l'action à valider. Les valeurs sensibles sont gardées temporairement pendant 15 minutes, puis supprimées.`;
+  }
+
+  private pendingDocumentDraftKey(conversationId: string, userId: string) {
+    return `chat:pending-document:${conversationId}:${userId}`;
+  }
+
+  private actionTransientKey(actionId: string) {
+    return `chat:action-transient:${actionId}`;
+  }
+
+  private redactSensitiveValues(question: string, formData: Record<string, string>) {
+    let redacted = question;
+    for (const value of Object.values(formData)) {
+      if (!value || value.length < 2) continue;
+      redacted = redacted.split(value).join('[valeur sensible fournie]');
+    }
+    return redacted;
   }
 }
