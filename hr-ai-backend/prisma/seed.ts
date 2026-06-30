@@ -35,6 +35,15 @@ type EmployeeCsvRow = {
   vacationBalanceDays: string;
   accountStatus: string;
   onboardingState: string;
+  companyType?: string;
+  wfhSetupAvailable?: string;
+  designationLevel?: string;
+  resourceAllocationScore?: string;
+  mentalFatigueScore?: string;
+  jobSatisfactionScore?: string;
+  workLifeBalanceScore?: string;
+  managerSupportScore?: string;
+  recognitionScore?: string;
 };
 
 const prisma = new PrismaClient({
@@ -77,6 +86,7 @@ type SeedTemplateField = {
   source: 'EMPLOYEE' | 'REQUEST' | 'SYSTEM';
   required: boolean;
   sensitive?: boolean;
+  storagePolicy?: 'STORE_SAFE' | 'TRANSIENT_ONLY';
   inputType?: 'text' | 'date' | 'number' | 'year';
   aliases?: string[];
 };
@@ -88,12 +98,13 @@ const seedFieldMap: Record<string, Omit<SeedTemplateField, 'label'>> = {
     required: true,
     sensitive: true,
   },
-  '[Numéro CIN]': { key: 'cinNumber', source: 'EMPLOYEE', required: true, sensitive: true },
+  '[Numéro CIN]': { key: 'cinNumber', source: 'REQUEST', required: true, sensitive: true, storagePolicy: 'TRANSIENT_ONLY' },
   '[Numéro CNSS personnel]': {
     key: 'cnssNumber',
-    source: 'EMPLOYEE',
+    source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
   },
   "[Nom de la compagnie d'assurance, ex: Wafa Assurance, RMA, Sanlam]": {
     key: 'insuranceCompany',
@@ -105,6 +116,7 @@ const seedFieldMap: Record<string, Omit<SeedTemplateField, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
   },
   "[Date d'embauche]": { key: 'hireDate', source: 'EMPLOYEE', required: true, inputType: 'date' },
   '[Intitulé du poste]': { key: 'positionTitle', source: 'EMPLOYEE', required: true },
@@ -132,6 +144,7 @@ const seedFieldMap: Record<string, Omit<SeedTemplateField, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     inputType: 'number',
   },
   '[Salaire net imposable]': {
@@ -139,6 +152,7 @@ const seedFieldMap: Record<string, Omit<SeedTemplateField, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     inputType: 'number',
   },
   '[Montant IR prélevé]': {
@@ -146,6 +160,7 @@ const seedFieldMap: Record<string, Omit<SeedTemplateField, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     inputType: 'number',
   },
   "[Date d'entrée]": { key: 'entryDate', source: 'EMPLOYEE', required: true, inputType: 'date' },
@@ -263,21 +278,6 @@ async function seedAtlasTemplates(uploadedBy: string) {
   }
 }
 
-async function hydrateEmployeeDocumentFields() {
-  const employees = await prisma.employee.findMany();
-  for (const [index, employee] of employees.entries()) {
-    await prisma.employee.update({
-      where: { id: employee.id },
-      data: {
-        cinNumber: employee.cinNumber ?? `CIN${String(index + 1).padStart(5, '0')}`,
-        cnssNumber: employee.cnssNumber ?? `CNSS${String(900000 + index)}`,
-        insuranceCompany: employee.insuranceCompany ?? 'Wafa Assurance',
-        insurancePolicyNumber: employee.insurancePolicyNumber ?? `POL-${employee.employeeNumber}`,
-      },
-    });
-  }
-}
-
 async function seedHrDemoDocuments(uploadedBy: string, collabId: string) {
   const documentSeeds = [
     {
@@ -353,6 +353,40 @@ async function seedHrDemoDocuments(uploadedBy: string, collabId: string) {
   }
 }
 
+async function repairManagerLinksFromCsv() {
+  const rows = parseCsv(join(process.cwd(), 'prisma', 'fixtures', 'employees.csv'));
+  for (const row of rows) {
+    if (!row.managerEmail) continue;
+    const [employee, manager] = await Promise.all([
+      prisma.employee.findUnique({ where: { email: row.email }, select: { id: true } }),
+      prisma.employee.findUnique({ where: { email: row.managerEmail }, select: { id: true } }),
+    ]);
+    if (employee && manager) {
+      await prisma.employee.update({
+        where: { id: employee.id },
+        data: { managerId: manager.id },
+      });
+    }
+  }
+
+  const departments = await prisma.department.findMany();
+  for (const department of departments) {
+    const managerRow = rows.find(
+      (row) => row.department === department.name && ['MANAGER', 'HR', 'ADMIN'].includes(row.role),
+    );
+    const fallbackManagerRow = rows.find((row) => row.email === 'admin@ydays.local');
+    const managerEmail = managerRow?.email ?? fallbackManagerRow?.email;
+    if (!managerEmail) continue;
+    const manager = await prisma.employee.findUnique({ where: { email: managerEmail }, select: { id: true } });
+    if (manager) {
+      await prisma.department.update({
+        where: { id: department.id },
+        data: { managerId: manager.id },
+      });
+    }
+  }
+}
+
 async function main() {
   const existingUsers = await prisma.user.count();
   if (existingUsers > 0) {
@@ -368,7 +402,7 @@ async function main() {
       },
     });
     if (hrUser) {
-      await hydrateEmployeeDocumentFields();
+      await repairManagerLinksFromCsv();
       await seedAtlasTemplates(hrUser.id);
       const collab = await prisma.employee.findUnique({ where: { email: 'collab@ydays.local' } });
       if (collab) await seedHrDemoDocuments(hrUser.id, collab.id);
@@ -386,7 +420,6 @@ async function main() {
 
   await prisma.aiMessage.deleteMany();
   await prisma.aiConversation.deleteMany();
-  await prisma.employeeRiskAlert.deleteMany();
   await prisma.securityAlert.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.kpiSnapshot.deleteMany();
@@ -496,10 +529,6 @@ async function main() {
         phone: row.phone,
         location: row.location,
         address: row.address,
-        cinNumber: `CIN${row.employeeNumber.replace(/\D/g, '').padStart(5, '0')}`,
-        cnssNumber: `CNSS${row.employeeNumber.replace(/\D/g, '').padStart(6, '0')}`,
-        insuranceCompany: 'Wafa Assurance',
-        insurancePolicyNumber: `POL-${row.employeeNumber}`,
         skills: row.skills.split(';').filter(Boolean),
         salary: Number(row.salary),
         hireDate: new Date(row.hireDate),
@@ -508,6 +537,15 @@ async function main() {
         presenceScore: Number(row.presenceScore),
         performanceScore: Number(row.performanceScore),
         vacationBalanceDays: Number(row.vacationBalanceDays),
+        companyType: row.companyType || 'SERVICE',
+        wfhSetupAvailable: String(row.wfhSetupAvailable || '').toLowerCase() === 'true',
+        designationLevel: Number(row.designationLevel || 2),
+        resourceAllocationScore: Number(row.resourceAllocationScore || 5),
+        mentalFatigueScore: Number(row.mentalFatigueScore || 5),
+        jobSatisfactionScore: Number(row.jobSatisfactionScore || 6),
+        workLifeBalanceScore: Number(row.workLifeBalanceScore || 6),
+        managerSupportScore: Number(row.managerSupportScore || 6),
+        recognitionScore: Number(row.recognitionScore || 6),
       },
     });
     employeeByEmail.set(employee.email, employee);
@@ -552,21 +590,6 @@ async function main() {
         },
       });
     }
-  }
-
-  for (const row of rows.filter((item) => Number(item.engagementScore) < 70).slice(0, 4)) {
-    const employee = employeeByEmail.get(row.email)!;
-    await prisma.employeeRiskAlert.create({
-      data: {
-        employeeId: employee.id,
-        level: Number(row.engagementScore) < 68 ? 'HIGH' : 'MEDIUM',
-        title: Number(row.engagementScore) < 68 ? 'Risque engagement eleve' : 'Engagement a surveiller',
-        detail: `Score engagement ${row.engagementScore}% avec presence ${row.presenceScore}%.`,
-        recommendation: 'Planifier un point manager RH et clarifier la charge de travail.',
-        factors: [`Engagement ${row.engagementScore}%`, `Presence ${row.presenceScore}%`, `Performance ${row.performanceScore}%`],
-        aiScore: Math.max(55, 100 - Number(row.engagementScore)),
-      },
-    });
   }
 
   await prisma.securityAlert.createMany({

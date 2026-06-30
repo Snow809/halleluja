@@ -1,5 +1,5 @@
 export type BackendRole = "COLLABORATOR" | "HR" | "MANAGER" | "ADMIN" | "QVT" | "DIRECTION";
-export type AppShell = "employee" | "hr" | "manager" | "admin";
+export type AppShell = "employee" | "hr" | "manager" | "admin" | "qvt";
 
 export interface Employee {
   id: string;
@@ -101,6 +101,10 @@ export interface HrDocument {
   visibility: string;
   status: string;
   createdAt: string;
+  indexedStatus?: "NOT_INDEXED" | "INDEXING" | "INDEXED" | "FAILED";
+  indexedAt?: string;
+  indexError?: string;
+  chunkCount?: number;
 }
 
 export interface GeneratedDocument {
@@ -155,6 +159,27 @@ export interface TemplateField {
   sensitive?: boolean;
   inputType?: "text" | "date" | "number" | "year";
   aliases?: string[];
+  storagePolicy?: "STORE_SAFE" | "TRANSIENT_ONLY";
+}
+
+export interface QvtAggregateSummary {
+  available: boolean;
+  modelStatus: "READY" | "NOT_TRAINED" | "INSUFFICIENT_GROUP_SIZE" | string;
+  scopeType: "COMPANY" | "DEPARTMENT" | "TEAM";
+  scopeId?: string | null;
+  employeeCount: number;
+  averageBurnoutRisk: number | null;
+  averageDisengagementRisk: number | null;
+  riskDistribution: Record<string, unknown>;
+  topDrivers: Array<{ key: string; label: string; value: number }>;
+  recommendation: string;
+  modelVersion?: string | null;
+  trainedAt?: string | null;
+}
+
+export interface QvtDepartmentSummary extends QvtAggregateSummary {
+  departmentId: string;
+  departmentName: string;
 }
 
 export interface WorkflowTask {
@@ -188,8 +213,40 @@ export interface Notification {
   message: string;
   resourceType?: string;
   resourceId?: string;
+  actionUrl?: string;
+  priority?: "LOW" | "NORMAL" | "HIGH";
   readAt?: string;
   createdAt: string;
+}
+
+export interface HrRequestComment {
+  id: string;
+  requestId: string;
+  visibility: "PUBLIC" | "INTERNAL";
+  body: string;
+  createdAt: string;
+  author?: { fullName: string; roles?: Array<{ role: { name: string } }> };
+}
+
+export interface AuditLog {
+  id: string;
+  userId?: string;
+  action: string;
+  resourceType: string;
+  resourceId?: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  user?: { id: string; fullName: string; email: string };
+}
+
+export interface EmployeeTimelineEvent {
+  id: string;
+  type: string;
+  title: string;
+  status: string;
+  date: string;
+  resourceId: string;
 }
 
 export interface ChatSource {

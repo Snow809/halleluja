@@ -2,10 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import {
   ChatResponse,
+  AuditLog,
   DocumentTemplate,
   Employee,
+  EmployeeTimelineEvent,
   GeneratedDocument,
   HrDocument,
+  HrRequestComment,
   HrRequest,
   Notification,
   OnboardingPlan,
@@ -20,8 +23,9 @@ export const keys = {
   employees: ["employees"] as const,
   requests: ["requests"] as const,
   users: ["users"] as const,
-  riskAlerts: ["risk-alerts"] as const,
+  qvt: ["qvt"] as const,
   hrContacts: ["hr-contact-requests"] as const,
+  audit: ["audit-logs"] as const,
 };
 
 export function useDashboardQuery<T>(name: string) {
@@ -63,8 +67,10 @@ export function useOnboarding() {
   return useQuery({ queryKey: keys.onboarding, queryFn: () => api.get<OnboardingPlan>("/onboarding/me"), retry: false });
 }
 
-export function useEmployees() {
-  return useQuery({ queryKey: keys.employees, queryFn: () => api.get<Employee[]>("/employees") });
+export function useEmployees(filters?: Record<string, string | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(filters ?? {}).forEach(([key, value]) => value && query.set(key, value));
+  return useQuery({ queryKey: [...keys.employees, filters], queryFn: () => api.get<Employee[]>(`/employees?${query}`) });
 }
 
 export function useEmployee(id?: string) {
@@ -76,6 +82,47 @@ export function useRequests(status?: string, kind?: string) {
   if (status) query.set("status", status);
   if (kind) query.set("kind", kind);
   return useQuery({ queryKey: [...keys.requests, status, kind], queryFn: () => api.get<HrRequest[]>(`/employees/requests?${query}`) });
+}
+
+export function useRequestDetail(id?: string) {
+  return useQuery({
+    queryKey: ["request", id],
+    queryFn: () => api.get<HrRequest>(`/employees/requests/${id}`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useRequestComments(id?: string) {
+  return useQuery({
+    queryKey: ["request-comments", id],
+    queryFn: () => api.get<HrRequestComment[]>(`/employees/requests/${id}/comments`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useEmployeeTimeline(id?: string) {
+  return useQuery({
+    queryKey: ["employee-timeline", id],
+    queryFn: () => api.get<EmployeeTimelineEvent[]>(`/employees/${id}/timeline`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useEmployeeAudit(id?: string) {
+  return useQuery({
+    queryKey: ["employee-audit", id],
+    queryFn: () => api.get<AuditLog[]>(`/employees/${id}/audit`),
+    enabled: Boolean(id),
+  });
+}
+
+export function useAuditLogs(filters?: Record<string, string | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(filters ?? {}).forEach(([key, value]) => value && query.set(key, value));
+  return useQuery({
+    queryKey: [...keys.audit, filters],
+    queryFn: () => api.get<AuditLog[]>(`/audit-logs?${query}`),
+  });
 }
 
 export function useMutationWithInvalidation<TVariables, TResult>(
@@ -94,4 +141,3 @@ export function useMutationWithInvalidation<TVariables, TResult>(
 export function useChatMutation() {
   return useMutation({ mutationFn: (input: { question: string; conversationId?: string }) => api.post<ChatResponse>("/chat/ask", input) });
 }
-

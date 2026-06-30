@@ -12,7 +12,6 @@ import {
   Map,
   Settings,
   ShieldCheck,
-  Trash2,
   Users,
 } from "lucide-react";
 import type { AppShell } from "@/api/types";
@@ -36,7 +35,6 @@ export const sidebarByShell: Record<AppShell, SidebarEntry[]> = {
     { label: "Documents", to: "/hr/documents", icon: Library },
     { label: "Demandes", to: "/hr/requests", icon: FileText },
     { label: "Boîte RH", to: "/hr/inbox", icon: Inbox },
-    { label: "Droit à l’oubli", to: "/hr/right-to-erasure", icon: Trash2 },
     { group: "ARIA", label: "Assistant IA", to: "/assistant", icon: Bot },
     { group: "Compte", label: "Paramètres", to: "/settings", icon: Settings },
   ],
@@ -46,7 +44,7 @@ export const sidebarByShell: Record<AppShell, SidebarEntry[]> = {
     { label: "Mes congés", to: "/manager/vacations", icon: CalendarDays },
     { label: "Demande document", to: "/manager/request-document", icon: FileText },
     { label: "Demandes", to: "/manager/requests", icon: BriefcaseBusiness },
-    { label: "Risques", to: "/manager/risks", icon: HeartPulse },
+    { label: "QVT équipe", to: "/manager/risks", icon: HeartPulse },
     { group: "ARIA", label: "Assistant IA", to: "/assistant", icon: Bot },
     { group: "Compte", label: "Paramètres", to: "/settings", icon: Settings },
   ],
@@ -57,10 +55,15 @@ export const sidebarByShell: Record<AppShell, SidebarEntry[]> = {
     { label: "Congés", to: "/admin/vacations", icon: CalendarDays },
     { label: "Documents", to: "/admin/documents", icon: Library },
     { label: "Demandes", to: "/admin/requests", icon: FileText },
-    { label: "Risques QVT", to: "/admin/risks", icon: HeartPulse },
-    { label: "Droit à l’oubli", to: "/admin/right-to-erasure", icon: Trash2 },
+    { label: "Audit", to: "/admin/audit", icon: ShieldCheck },
     { group: "IA", label: "Supervision IA", to: "/admin/ai-supervision", icon: ShieldCheck },
     { label: "Assistant IA", to: "/assistant", icon: Bot },
+    { group: "Compte", label: "Paramètres", to: "/settings", icon: Settings },
+  ],
+  qvt: [
+    { group: "QVT", label: "Dashboard", to: "/qvt/dashboard", icon: Gauge },
+    { label: "Analyses anonymes", to: "/qvt/analytics", icon: HeartPulse },
+    { group: "ARIA", label: "Assistant IA", to: "/assistant", icon: Bot },
     { group: "Compte", label: "Paramètres", to: "/settings", icon: Settings },
   ],
 };
@@ -70,6 +73,7 @@ export function shellLabel(shell?: AppShell | null) {
   if (shell === "hr") return "RH";
   if (shell === "manager") return "Manager";
   if (shell === "admin") return "Admin";
+  if (shell === "qvt") return "QVT";
   return "Intelli-Talent";
 }
 

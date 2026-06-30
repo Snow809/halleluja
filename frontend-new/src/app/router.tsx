@@ -25,9 +25,11 @@ const RequestReview = lazyNamed(() => import("@/features/hr/RequestReview"), "Re
 const AISupervision = lazyNamed(() => import("@/features/hr/AISupervision"), "AISupervision");
 const HrInbox = lazyNamed(() => import("@/features/hr/HrInbox"), "HrInbox");
 const RightToErasure = lazyNamed(() => import("@/features/hr/RightToErasure"), "RightToErasure");
+const AuditLogs = lazyNamed(() => import("@/features/hr/AuditLogs"), "AuditLogs");
 const ManagerDashboard = lazyNamed(() => import("@/features/manager/ManagerDashboard"), "ManagerDashboard");
 const Team = lazyNamed(() => import("@/features/manager/Team"), "Team");
-const TeamRiskAlerts = lazyNamed(() => import("@/features/manager/TeamRiskAlerts"), "TeamRiskAlerts");
+const QvtDashboard = lazyNamed(() => import("@/features/qvt/QvtDashboard"), "QvtDashboard");
+const QvtAnalytics = lazyNamed(() => import("@/features/qvt/QvtAnalytics"), "QvtAnalytics");
 const AIAssistant = lazyNamed(() => import("@/features/shared/AIAssistant"), "AIAssistant");
 const Profile = lazyNamed(() => import("@/features/shared/Profile"), "Profile");
 const Settings = lazyNamed(() => import("@/features/shared/Settings"), "Settings");
@@ -57,7 +59,7 @@ function HomeRedirect() {
   return <Navigate to={`/${shell ?? "login"}/dashboard`} replace />;
 }
 
-function RoleOnly({ role }: { role: "employee" | "hr" | "manager" | "admin" }) {
+function RoleOnly({ role }: { role: "employee" | "hr" | "manager" | "admin" | "qvt" }) {
   const { shell } = useAuth();
   if (!shell) return <Navigate to="/login" replace />;
   return shell === role ? <Outlet /> : <Navigate to={`/${shell}/dashboard`} replace />;
@@ -98,7 +100,7 @@ export function AppRouter() {
             <Route path="/manager/vacations" element={<RequestVacation />} />
             <Route path="/manager/request-document" element={<RequestDocument />} />
             <Route path="/manager/requests" element={<RequestReview />} />
-            <Route path="/manager/risks" element={<TeamRiskAlerts />} />
+            <Route path="/manager/risks" element={<QvtDashboard scope="manager" />} />
           </Route>
           <Route element={<RoleOnly role="admin" />}>
             <Route path="/admin/dashboard" element={<HRDashboard />} />
@@ -110,8 +112,12 @@ export function AppRouter() {
             <Route path="/admin/documents" element={<DocumentLibrary />} />
             <Route path="/admin/requests" element={<RequestReview />} />
             <Route path="/admin/ai-supervision" element={<AISupervision />} />
-            <Route path="/admin/risks" element={<TeamRiskAlerts />} />
             <Route path="/admin/right-to-erasure" element={<RightToErasure />} />
+            <Route path="/admin/audit" element={<AuditLogs />} />
+          </Route>
+          <Route element={<RoleOnly role="qvt" />}>
+            <Route path="/qvt/dashboard" element={<QvtDashboard scope="qvt" />} />
+            <Route path="/qvt/analytics" element={<QvtAnalytics />} />
           </Route>
           <Route path="/assistant" element={<AIAssistant />} />
           <Route path="/profile" element={<Profile />} />

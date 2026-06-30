@@ -27,7 +27,7 @@ export class GenerationService {
     return Buffer.concat(chunks);
   }
 
-  async generateDocument(requestId: string) {
+  async generateDocument(requestId: string, transientFormData?: Record<string, unknown>) {
     const request = await this.prisma.hrRequest.findUnique({
       where: { id: requestId },
       include: {
@@ -63,7 +63,7 @@ export class GenerationService {
       };
       const data =
         fieldSchema.length > 0
-          ? this.templateData.assertComplete(fieldSchema, request.employee, request.formData)
+          ? this.templateData.assertComplete(fieldSchema, request.employee, transientFormData ?? request.formData)
           : legacyData;
       const renderBuffer =
         fieldSchema.length > 0
@@ -98,6 +98,7 @@ export class GenerationService {
       const generated = await this.prisma.generatedDocument.create({
         data: {
           employeeId: request.employeeId,
+          requestId: request.id,
           generatedBy,
           validatedBy: request.reviewedBy,
           documentType: request.template.documentType,
@@ -106,7 +107,7 @@ export class GenerationService {
           anonymizedFilePath: anonymizedKey,
           sizeBytes: anonymizedPdf.length,
           fileType: 'PDF',
-          status: 'APPROVED',
+          status: 'DRAFT',
         },
       });
 

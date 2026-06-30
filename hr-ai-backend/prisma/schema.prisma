@@ -86,12 +86,6 @@ enum HrRequestPriority {
   URGENT
 }
 
-enum RiskLevel {
-  LOW
-  MEDIUM
-  HIGH
-}
-
 enum AiMessageRole {
   USER
   ASSISTANT
@@ -131,6 +125,24 @@ enum NotificationType {
   ONBOARDING
   ALERT
   SYSTEM
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum HrRequestCommentVisibility {
+  PUBLIC
+  INTERNAL
+}
+
+enum DocumentIndexStatus {
+  NOT_INDEXED
+  INDEXING
+  INDEXED
+  FAILED
 }
 
 enum HrContactStatus {
@@ -177,6 +189,7 @@ model User {
   contactRequests HrContactRequest[]
   erasureRequests DataErasureRequest[] @relation("ErasureRequester")
   erasureReviews DataErasureRequest[] @relation("ErasureReviewer")
+  requestComments HrRequestComment[]
 }
 
 model Role {
@@ -244,10 +257,6 @@ model Employee {
   phone          String?
   location       String?
   address        String?
-  cinNumber      String?
-  cnssNumber     String?
-  insuranceCompany String?
-  insurancePolicyNumber String?
   skills         String[]            @default([])
   presenceScore  Int                 @default(92)
   performanceScore Int               @default(80)
@@ -257,6 +266,15 @@ model Employee {
   hireDate       DateTime
   status         EmployeeStatus      @default(ACTIVE)
   engagementScore Int                @default(72)
+  companyType    String              @default("SERVICE")
+  wfhSetupAvailable Boolean          @default(false)
+  designationLevel Int               @default(2)
+  resourceAllocationScore Decimal    @default(5.0) @db.Decimal(4, 2)
+  mentalFatigueScore Decimal         @default(5.0) @db.Decimal(4, 2)
+  jobSatisfactionScore Decimal       @default(6.0) @db.Decimal(4, 2)
+  workLifeBalanceScore Decimal       @default(6.0) @db.Decimal(4, 2)
+  managerSupportScore Decimal        @default(6.0) @db.Decimal(4, 2)
+  recognitionScore Decimal           @default(6.0) @db.Decimal(4, 2)
   user           User?               @relation(fields: [userId], references: [id])
   department     Department?         @relation("DepartmentEmployees", fields: [departmentId], references: [id])
   position       JobPosition?        @relation(fields: [positionId], references: [id])
@@ -269,7 +287,6 @@ model Employee {
   hrDocuments    HrDocument[]
   workflowTasks  WorkflowTask[]      @relation("WorkflowEmployee")
   assignedTasks  WorkflowTask[]      @relation("WorkflowAssignee")
-  riskAlerts     EmployeeRiskAlert[]
   erasureRequests DataErasureRequest[]
 }
 
@@ -330,11 +347,27 @@ model HrRequest {
   template    DocumentTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   reviewer    User?            @relation("RequestReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
   absence     Absence?
+  comments    HrRequestComment[]
+  generatedDocument GeneratedDocument?
+}
+
+model HrRequestComment {
+  id          String                     @id @default(cuid())
+  requestId   String
+  authorUserId String
+  visibility  HrRequestCommentVisibility @default(PUBLIC)
+  body        String
+  createdAt   DateTime                   @default(now())
+  request     HrRequest                  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  author      User                       @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
 }
 
 model GeneratedDocument {
   id           String         @id @default(cuid())
   employeeId   String
+  requestId    String?        @unique
   generatedBy  String
   validatedBy  String?
   documentType String
@@ -349,6 +382,7 @@ model GeneratedDocument {
   generatedAt  DateTime       @default(now())
   employee     Employee       @relation("GeneratedFor", fields: [employeeId], references: [id], onDelete: Cascade)
   generator    User           @relation("DocumentGenerator", fields: [generatedBy], references: [id])
+  request      HrRequest?     @relation(fields: [requestId], references: [id], onDelete: SetNull)
 }
 
 model HrDocument {
@@ -366,6 +400,9 @@ model HrDocument {
   visibility   DocumentVisibility @default(ROLE_RESTRICTED)
   allowedRoles String[]        @default(["ADMIN", "HR"])
   status       DocumentStatus @default(PENDING_REVIEW)
+  indexedStatus DocumentIndexStatus @default(NOT_INDEXED)
+  indexedAt    DateTime?
+  indexError   String?
   createdAt    DateTime       @default(now())
   employee     Employee?      @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   uploader     User           @relation("DocumentUploader", fields: [uploadedBy], references: [id])
@@ -401,22 +438,6 @@ model WorkflowTask {
   status       TaskStatus   @default(TODO)
   employee     Employee     @relation("WorkflowEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
   assignee     Employee?    @relation("WorkflowAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
-}
-
-model EmployeeRiskAlert {
-  id             String    @id @default(cuid())
-  employeeId     String
-  level          RiskLevel
-  title          String
-  detail         String
-  recommendation String
-  factors        String[]  @default([])
-  aiScore        Int
-  createdAt      DateTime  @default(now())
-  resolvedAt     DateTime?
-  followUpNote   String?
-  followUpAt     DateTime?
-  employee       Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
 
 model DataImport {
@@ -525,6 +546,8 @@ model Notification {
   message   String
   resourceType String?
   resourceId String?
+  actionUrl String?
+  priority  NotificationPriority @default(NORMAL)
   readAt    DateTime?
   createdAt DateTime         @default(now())
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -545,6 +568,29 @@ model HrContactRequest {
   user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
+}
+
+enum QvtScopeType {
+  COMPANY
+  DEPARTMENT
+  TEAM
+}
+
+model QvtPredictionSnapshot {
+  id        String       @id @default(cuid())
+  scopeType QvtScopeType
+  scopeId   String?
+  employeeCount Int
+  averageBurnoutRisk Decimal? @db.Decimal(5, 2)
+  averageDisengagementRisk Decimal? @db.Decimal(5, 2)
+  riskDistribution Json      @default("{}")
+  topDrivers Json            @default("[]")
+  recommendation String
+  modelVersion String?
+  trainedAt DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([scopeType, scopeId, createdAt])
 }
 
 model DataErasureRequest {

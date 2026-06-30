@@ -2,13 +2,15 @@ import {
   Body,
   Controller,
   Get,
+  Header,
+  NotFoundException,
   Param,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseGuards,
   UseInterceptors,
-  NotFoundException
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
@@ -48,8 +50,46 @@ export class DocumentsController {
 
   @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.DIRECTION, UserRole.QVT)
   @Get()
-  findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.documentsService.findAll(user);
+  findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('status') status?: string,
+    @Query('visibility') visibility?: string,
+    @Query('category') category?: string,
+    @Query('fileType') fileType?: string,
+    @Query('indexedStatus') indexedStatus?: string,
+  ) {
+    return this.documentsService.findAll(user, { status, visibility, category, fileType, indexedStatus });
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.DIRECTION, UserRole.QVT)
+  @Get('export')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="documents.csv"')
+  exportCsv(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('status') status?: string,
+    @Query('visibility') visibility?: string,
+    @Query('category') category?: string,
+    @Query('fileType') fileType?: string,
+    @Query('indexedStatus') indexedStatus?: string,
+  ) {
+    return this.documentsService.exportCsv(user, { status, visibility, category, fileType, indexedStatus });
+  }
+
+  @Get('download/:id')
+  async downloadDocument(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    const doc = await this.prisma.generatedDocument.findUnique({ where: { id } });
+    if (!doc) throw new NotFoundException('Document non trouvé');
+
+    const employee = await this.prisma.employee.findUnique({ where: { userId: user.userId } });
+    if (
+      doc.status !== 'APPROVED' ||
+      (doc.employeeId !== employee?.id && user.role !== 'HR' && user.role !== 'ADMIN')
+    ) {
+      throw new NotFoundException('Document non trouvé ou accès refusé');
+    }
+
+    return { url: await this.s3Service.getPresignedUrl(doc.filePath, 300) };
   }
 
   @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.DIRECTION, UserRole.QVT)
@@ -70,8 +110,8 @@ export class DocumentsController {
 
   @Roles(UserRole.HR, UserRole.ADMIN)
   @Patch(':id/archive')
-  archive(@Param('id') id: string) {
-    return this.documentsService.archive(id);
+  archive(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.documentsService.archive(id, user);
   }
 
   @Get(':id/download')
@@ -82,27 +122,5 @@ export class DocumentsController {
   @Get(':id/preview')
   getPreview(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.documentsService.getPreview(id, user);
-  }
-
-  @Get('download/:id')
-  async downloadDocument(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
-    const doc = await this.prisma.generatedDocument.findUnique({
-      where: { id }
-    });
-
-    if (!doc) {
-      throw new NotFoundException('Document non trouvé');
-    }
-
-    const employee = await this.prisma.employee.findUnique({ where: { userId: user.userId } });
-    if (
-      doc.status !== 'APPROVED' ||
-      (doc.employeeId !== employee?.id && user.role !== 'HR' && user.role !== 'ADMIN')
-    ) {
-      throw new NotFoundException('Document non trouvé ou accès refusé');
-    }
-
-    const url = await this.s3Service.getPresignedUrl(doc.filePath, 300);
-    return { url };
   }
 }

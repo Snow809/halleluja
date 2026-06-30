@@ -5,6 +5,7 @@ import { S3Service } from '../../services/storage/s3.service';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 import { buildFieldSchema, normalizeTemplateFieldSchema } from './template-fields';
 import { TemplateDataService } from './template-data.service';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class TemplatesService {
@@ -12,6 +13,7 @@ export class TemplatesService {
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
     private readonly templateData: TemplateDataService,
+    private readonly audit: AuditService,
   ) {}
 
   async findAll(includeInactive = false, userId?: string) {
@@ -48,7 +50,7 @@ export class TemplatesService {
     const fieldSchema = buildFieldSchema(file.buffer);
     await this.s3.uploadFile(key, file.buffer, file.mimetype);
 
-    return this.prisma.documentTemplate.create({
+    const template = await this.prisma.documentTemplate.create({
       data: {
         uploadedBy: userId,
         title: data.title,
@@ -62,9 +64,11 @@ export class TemplatesService {
         fieldSchema: fieldSchema as unknown as Prisma.InputJsonValue,
       }
     });
+    await this.audit.log(userId, 'TEMPLATE_CREATE', 'DocumentTemplate', template.id, 'SUCCESS');
+    return template;
   }
 
-  async update(id: string, data: UpdateTemplateDto, file?: Express.Multer.File) {
+  async update(id: string, data: UpdateTemplateDto, file?: Express.Multer.File, userId?: string) {
     const template = await this.prisma.documentTemplate.findUnique({ where: { id } });
     if (!template) throw new NotFoundException('Template not found');
     let replacement:
@@ -92,17 +96,22 @@ export class TemplatesService {
     if (replacement) {
       await this.s3.deleteFile(template.filePath).catch(() => undefined);
     }
+    await this.audit.log(userId, 'TEMPLATE_UPDATE', 'DocumentTemplate', id, 'SUCCESS', {
+      replacedFile: Boolean(replacement),
+    });
     return updated;
   }
 
-  async toggleActive(id: string, isActive: boolean) {
-    return this.prisma.documentTemplate.update({
+  async toggleActive(id: string, isActive: boolean, userId?: string) {
+    const template = await this.prisma.documentTemplate.update({
       where: { id },
       data: { isActive },
     });
+    await this.audit.log(userId, isActive ? 'TEMPLATE_ACTIVATE' : 'TEMPLATE_DEACTIVATE', 'DocumentTemplate', id, 'SUCCESS');
+    return template;
   }
 
-  async delete(id: string) {
+  async delete(id: string, userId?: string) {
     const template = await this.prisma.documentTemplate.findUnique({ where: { id } });
     if (!template) throw new NotFoundException('Template not found');
 
@@ -113,7 +122,28 @@ export class TemplatesService {
       console.error('Could not delete file from S3', e);
     }
 
-    return this.prisma.documentTemplate.delete({ where: { id } });
+    const deleted = await this.prisma.documentTemplate.delete({ where: { id } });
+    await this.audit.log(userId, 'TEMPLATE_DELETE', 'DocumentTemplate', id, 'SUCCESS');
+    return deleted;
+  }
+
+  async getFields(id: string) {
+    const template = await this.prisma.documentTemplate.findUnique({ where: { id } });
+    if (!template) throw new NotFoundException('Template not found');
+    return normalizeTemplateFieldSchema(template.fieldSchema);
+  }
+
+  async updateFields(id: string, fields: unknown, userId?: string) {
+    const template = await this.prisma.documentTemplate.findUnique({ where: { id } });
+    if (!template) throw new NotFoundException('Template not found');
+    if (!Array.isArray(fields)) throw new BadRequestException('fields must be an array');
+    const normalized = normalizeTemplateFieldSchema(fields as Prisma.JsonValue);
+    const updated = await this.prisma.documentTemplate.update({
+      where: { id },
+      data: { fieldSchema: normalized as unknown as Prisma.InputJsonValue },
+    });
+    await this.audit.log(userId, 'TEMPLATE_FIELDS_UPDATE', 'DocumentTemplate', id, 'SUCCESS');
+    return { ...updated, fieldSchema: normalized };
   }
 
   private assertDocx(file: Express.Multer.File) {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Avatar, Box, Button, HStack, IconButton, Input, SimpleGrid, Stack, Text } from "@chakra-ui/react";
+import { Avatar, Badge, Box, Button, HStack, IconButton, Input, SimpleGrid, Stack, Text } from "@chakra-ui/react";
 import { Bot, Check, FileText, MessageCircle, Plus, Send, User, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
@@ -13,6 +13,7 @@ interface Message {
   content: string;
   sources?: ChatSource[];
   action?: ProposedAction;
+  refused?: boolean;
 }
 
 const prompts = [
@@ -96,6 +97,7 @@ export function AIAssistant() {
                     content: event.data.answer ?? message.content,
                     sources: event.data.sources,
                     action: event.data.proposedAction,
+                    refused: event.data.refused,
                   }
                 : message,
             ),

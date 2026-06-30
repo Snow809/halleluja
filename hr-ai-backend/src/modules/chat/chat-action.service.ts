@@ -15,6 +15,7 @@ import { LlmMessage, LlmService } from '../../services/llm/llm.service';
 import { TemplateDataService } from '../documents/template-data.service';
 import {
   normalizeTemplateFieldSchema,
+  redactFormDataForStorage,
   sanitizeFormData,
   TemplateFieldDefinition,
 } from '../documents/template-fields';
@@ -196,6 +197,9 @@ export class ChatActionService {
       if (!template) return null;
       const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
       const formData = sanitizeFormData(detected.formData);
+      const transientFields = fieldSchema.filter(
+        (field) => field.required && (field.storagePolicy === 'TRANSIENT_ONLY' || field.sensitive) && field.source === 'REQUEST',
+      );
       if (fieldSchema.length > 0) {
         const employee = await this.prisma.employee.findUnique({
           where: { userId: user.userId },
@@ -208,6 +212,16 @@ export class ChatActionService {
         if (missingFields.length > 0) {
           return { followUp: this.documentMissingFieldsQuestion(template.title, missingFields) };
         }
+        const providedTransient = transientFields.filter((field) => formData[field.key]);
+        if (providedTransient.length > 0) {
+          return {
+            followUp:
+              `Je peux identifier le modèle **${template.title}**, mais les champs sensibles (${providedTransient
+                .map((field) => field.label.replace(/[[\]]/g, ''))
+                .join(', ')}) ne doivent pas être stockés dans le chat. ` +
+              `Utilisez le formulaire sécurisé “Demande document” pour saisir ces valeurs et générer la demande sans les conserver en base.`,
+          };
+        }
       }
       return this.createDraft(
         conversationId,
@@ -216,7 +230,7 @@ export class ChatActionService {
         {
           templateId: template.id,
           note: detected.note || 'Requested through ARIA',
-          formData,
+          formData: redactFormDataForStorage(fieldSchema, formData),
           formDataLabels: Object.fromEntries(fieldSchema.map((field) => [field.key, field.label])),
         },
         `Préparer la demande de document "${template.title}"`,

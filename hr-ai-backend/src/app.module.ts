@@ -22,9 +22,9 @@ import { WorkersModule } from './workers/workers.module';
 import { RedisModule } from './common/redis/redis.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { HrContactModule } from './modules/hr-contact/hr-contact.module';
-import { EmployeeRiskAlertsModule } from './modules/employee-risk-alerts/employee-risk-alerts.module';
 import { ConsentsModule } from './modules/consents/consents.module';
 import { DataErasureModule } from './modules/data-erasure/data-erasure.module';
+import { QvtModule } from './modules/qvt/qvt.module';
 
 @Module({
   imports: [
@@ -50,9 +50,9 @@ import { DataErasureModule } from './modules/data-erasure/data-erasure.module';
     RedisModule,
     NotificationsModule,
     HrContactModule,
-    EmployeeRiskAlertsModule,
     ConsentsModule,
     DataErasureModule,
+    QvtModule,
   ],
   controllers: [AppController],
 })

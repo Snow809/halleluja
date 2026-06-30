@@ -13,10 +13,6 @@ type EmployeeWithContext = {
   phone?: string | null;
   address?: string | null;
   employeeNumber: string;
-  cinNumber?: string | null;
-  cnssNumber?: string | null;
-  insuranceCompany?: string | null;
-  insurancePolicyNumber?: string | null;
   salary: Prisma.Decimal | number | string;
   hireDate: Date;
   department?: { name: string } | null;
@@ -95,14 +91,6 @@ export class TemplateDataService {
         return employee.address ?? '';
       case 'employeeNumber':
         return employee.employeeNumber;
-      case 'cinNumber':
-        return employee.cinNumber ?? '';
-      case 'cnssNumber':
-        return employee.cnssNumber ?? '';
-      case 'insuranceCompany':
-        return employee.insuranceCompany ?? '';
-      case 'insurancePolicyNumber':
-        return employee.insurancePolicyNumber ?? '';
       case 'positionTitle':
         return employee.position?.title ?? '';
       case 'department':

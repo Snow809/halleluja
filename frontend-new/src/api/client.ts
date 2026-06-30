@@ -82,6 +82,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retry 
 
 export const api = {
   get: <T>(path: string) => apiRequest<T>(path),
+  text: (path: string) => textRequest(path),
   post: <T>(path: string, body?: unknown) =>
     apiRequest<T>(path, {
       method: "POST",
@@ -96,6 +97,22 @@ export const api = {
   streamChat: (body: { question: string; conversationId?: string }, onEvent: (event: { type: string; data: any }) => void) =>
     streamChat(body, onEvent),
 };
+
+async function textRequest(path: string, init: RequestInit = {}, retry = true): Promise<string> {
+  const session = readSession();
+  const headers = new Headers(init.headers);
+  if (session?.accessToken) headers.set("Authorization", `Bearer ${session.accessToken}`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...init, headers });
+  if (response.status === 401 && retry && session?.refreshToken) {
+    await refreshAccessToken();
+    return textRequest(path, init, false);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new ApiError(errorMessage(payload), response.status, payload);
+  }
+  return response.text();
+}
 
 async function streamChat(
   body: { question: string; conversationId?: string },

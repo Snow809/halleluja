@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes } from '@nestjs/swagger';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -26,10 +26,32 @@ export class EmployeesController {
     return this.employeesService.create(dto);
   }
 
-  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.DIRECTION, UserRole.QVT)
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.DIRECTION)
   @Get()
-  findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.employeesService.findAll(user);
+  findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('department') department?: string,
+    @Query('managerId') managerId?: string,
+    @Query('status') status?: string,
+    @Query('position') position?: string,
+    @Query('role') role?: string,
+  ) {
+    return this.employeesService.findAll(user, { department, managerId, status, position, role });
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.DIRECTION)
+  @Get('export')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="employees.csv"')
+  exportCsv(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('department') department?: string,
+    @Query('managerId') managerId?: string,
+    @Query('status') status?: string,
+    @Query('position') position?: string,
+    @Query('role') role?: string,
+  ) {
+    return this.employeesService.exportCsv(user, { department, managerId, status, position, role });
   }
 
   @Roles(UserRole.ADMIN, UserRole.HR)
@@ -96,6 +118,28 @@ export class EmployeesController {
     return this.employeesService.updateRequestStatus(id, dto.status, user, dto.comment);
   }
 
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.COLLABORATOR)
+  @Get('requests/:id')
+  getRequest(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.employeesService.getRequest(id, user);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.COLLABORATOR)
+  @Get('requests/:id/comments')
+  getRequestComments(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.employeesService.listRequestComments(id, user);
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER, UserRole.COLLABORATOR)
+  @Post('requests/:id/comments')
+  createRequestComment(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: { body?: string; visibility?: 'PUBLIC' | 'INTERNAL' },
+  ) {
+    return this.employeesService.createRequestComment(id, user, dto as any);
+  }
+
   @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER)
   @Post('absences')
   createAbsence(@Body() dto: any) {
@@ -118,6 +162,18 @@ export class EmployeesController {
   @Get('meta/positions')
   getPositions() {
     return this.employeesService.getPositions();
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER)
+  @Get(':id/timeline')
+  getTimeline(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.employeesService.getTimeline(id, user);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Get(':id/audit')
+  getEmployeeAudit(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.employeesService.getEmployeeAudit(id, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.HR, UserRole.MANAGER)

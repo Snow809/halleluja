@@ -4,9 +4,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { keys, useNotifications } from "@/api/queries";
 import { useAuth } from "@/app/AuthContext";
+import { useNavigate } from "react-router-dom";
+import type { Notification } from "@/api/types";
 
 export function NotificationsPanel({ onClose, onShowAll }: { onClose(): void; onShowAll(): void }) {
-  const { user } = useAuth();
+  const { user, shell } = useAuth();
+  const navigate = useNavigate();
   const query = useNotifications(user?.userId);
   const client = useQueryClient();
   const notifications = query.data ?? [];
@@ -27,6 +30,11 @@ export function NotificationsPanel({ onClose, onShowAll }: { onClose(): void; on
           <Box key={item.id} mx={2} p={3} borderRadius="14px" bg={item.readAt ? "white" : "brand.50"} cursor="pointer" onClick={async () => {
             if (!item.readAt) await api.patch(`/notifications/${item.id}/read`);
             await client.invalidateQueries({ queryKey: keys.notifications });
+            const url = notificationUrl(item, shell);
+            if (url) {
+              onClose();
+              navigate(url);
+            }
           }}>
             <Text fontWeight="900" fontSize="sm">{item.title}</Text>
             <Text fontSize="xs" color="gray.500">{item.message}</Text>
@@ -39,3 +47,16 @@ export function NotificationsPanel({ onClose, onShowAll }: { onClose(): void; on
   );
 }
 
+function notificationUrl(item: Notification, shell?: string | null) {
+  if (item.actionUrl?.startsWith("/requests/")) {
+    if (shell === "hr") return "/hr/requests";
+    if (shell === "admin") return "/admin/requests";
+    if (shell === "manager") return "/manager/requests";
+    return "/employee/vacations";
+  }
+  if (item.actionUrl?.startsWith("/")) return item.actionUrl;
+  if (item.resourceType === "HrRequest") return "/assistant";
+  if (item.resourceType === "HrDocument") return "/hr/documents";
+  if (item.resourceType === "GeneratedDocument") return "/employee/documents";
+  return "";
+}

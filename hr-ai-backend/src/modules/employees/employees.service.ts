@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { HrRequestCommentVisibility, Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
@@ -8,7 +9,8 @@ import { AuthenticatedUser } from '../../common/decorators/current-user.decorato
 import { S3Service } from '../../services/storage/s3.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TemplateDataService } from '../documents/template-data.service';
-import { normalizeTemplateFieldSchema, sanitizeFormData } from '../documents/template-fields';
+import { normalizeTemplateFieldSchema, redactFormDataForStorage, sanitizeFormData } from '../documents/template-fields';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class EmployeesService {
@@ -17,6 +19,7 @@ export class EmployeesService {
     private readonly generationService: GenerationService,
     private readonly s3: S3Service,
     private readonly notifications: NotificationsService,
+    private readonly audit: AuditService,
     private readonly templateData: TemplateDataService = new TemplateDataService(),
   ) {}
 
@@ -52,17 +55,52 @@ export class EmployeesService {
     });
   }
 
-  async findAll(user: AuthenticatedUser) {
-    const where = await this.employeeScope(user);
+  async findAll(
+    user: AuthenticatedUser,
+    filters: { department?: string; managerId?: string; status?: string; position?: string; role?: string } = {},
+  ) {
+    const where: Prisma.EmployeeWhereInput = {
+      AND: [
+        await this.employeeScope(user),
+        filters.department ? { department: { name: { contains: filters.department, mode: 'insensitive' } } } : {},
+        filters.managerId ? { managerId: filters.managerId } : {},
+        filters.status ? { status: filters.status as any } : {},
+        filters.position ? { position: { title: { contains: filters.position, mode: 'insensitive' } } } : {},
+        filters.role ? { user: { roles: { some: { role: { name: filters.role } } } } } : {},
+      ],
+    };
     const employees = await this.prisma.employee.findMany({
       where,
       include: {
         department: true,
         position: true,
         manager: { select: { id: true, firstName: true, lastName: true } },
+        user: {
+          select: {
+            email: true,
+            fullName: true,
+            roles: { include: { role: { select: { name: true } } } },
+          },
+        },
       }
     });
     return employees.map((employee) => this.sanitizeEmployee(employee, user));
+  }
+
+  async exportCsv(user: AuthenticatedUser, filters: Parameters<EmployeesService['findAll']>[1] = {}) {
+    const employees = await this.findAll(user, filters);
+    const header = ['employeeNumber', 'fullName', 'email', 'department', 'position', 'manager', 'status', 'role'];
+    const rows = employees.map((employee: any) => [
+      employee.employeeNumber,
+      `${employee.firstName} ${employee.lastName}`,
+      employee.email,
+      employee.department?.name ?? '',
+      employee.position?.title ?? '',
+      employee.manager ? `${employee.manager.firstName} ${employee.manager.lastName}` : '',
+      employee.status,
+      employee.user?.roles?.map((item: any) => item.role.name).join('|') ?? '',
+    ]);
+    return [header, ...rows].map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   }
 
   async findOne(id: string, user: AuthenticatedUser) {
@@ -80,6 +118,50 @@ export class EmployeesService {
     });
     if (!employee) throw new NotFoundException('Employee not found');
     return this.sanitizeEmployee(employee, user);
+  }
+
+  async getTimeline(id: string, user: AuthenticatedUser) {
+    const employee = await this.findOne(id, user) as any;
+    const events = [
+      ...(employee.requests ?? []).map((request: any) => ({
+        id: request.id,
+        type: 'REQUEST',
+        title: request.requestType,
+        status: request.status,
+        date: request.createdAt,
+        resourceId: request.id,
+      })),
+      ...(employee.absences ?? []).map((absence: any) => ({
+        id: absence.id,
+        type: 'ABSENCE',
+        title: absence.absenceType,
+        status: absence.status,
+        date: absence.startDate,
+        resourceId: absence.id,
+      })),
+      ...(employee.generatedDocs ?? []).map((document: any) => ({
+        id: document.id,
+        type: 'GENERATED_DOCUMENT',
+        title: document.title,
+        status: document.status,
+        date: document.generatedAt,
+        resourceId: document.id,
+      })),
+      ...(employee.hrDocuments ?? []).map((document: any) => ({
+        id: document.id,
+        type: 'HR_DOCUMENT',
+        title: document.title,
+        status: document.status,
+        date: document.createdAt,
+        resourceId: document.id,
+      })),
+    ];
+    return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }
+
+  async getEmployeeAudit(id: string, user: AuthenticatedUser) {
+    await this.findOne(id, user);
+    return this.audit.findMany(user, { resourceId: id });
   }
 
   update(id: string, dto: UpdateEmployeeDto) {
@@ -174,8 +256,75 @@ export class EmployeesService {
       include: {
         employee: { include: { department: true, position: true } },
         template: true,
+        comments: {
+          orderBy: { createdAt: 'asc' },
+          include: { author: { select: { fullName: true, roles: { include: { role: true } } } } },
+        },
       },
     });
+  }
+
+  async getRequest(id: string, user: AuthenticatedUser) {
+    const request = await this.prisma.hrRequest.findUnique({
+      where: { id },
+      include: {
+        employee: { include: { department: true, position: true, manager: true } },
+        template: true,
+        comments: {
+          orderBy: { createdAt: 'asc' },
+          include: { author: { select: { fullName: true, roles: { include: { role: true } } } } },
+        },
+      },
+    });
+    if (!request) throw new NotFoundException('Request not found');
+    const access = await this.requestAccess(user, request, 'view');
+    return {
+      ...request,
+      comments: request.comments.filter(
+        (comment: any) => access.canSeeInternal || comment.visibility === HrRequestCommentVisibility.PUBLIC,
+      ),
+    };
+  }
+
+  async listRequestComments(id: string, user: AuthenticatedUser) {
+    const request = await this.prisma.hrRequest.findUnique({ where: { id }, include: { employee: true } });
+    if (!request) throw new NotFoundException('Request not found');
+    const access = await this.requestAccess(user, request, 'view');
+    return this.prisma.hrRequestComment.findMany({
+      where: {
+        requestId: id,
+        ...(access.canSeeInternal ? {} : { visibility: HrRequestCommentVisibility.PUBLIC }),
+      },
+      orderBy: { createdAt: 'asc' },
+      include: { author: { select: { fullName: true, roles: { include: { role: true } } } } },
+    });
+  }
+
+  async createRequestComment(
+    id: string,
+    user: AuthenticatedUser,
+    dto: { body?: string; visibility?: HrRequestCommentVisibility },
+  ) {
+    const body = dto.body?.trim();
+    if (!body) throw new BadRequestException('Comment body is required');
+    const request = await this.prisma.hrRequest.findUnique({ where: { id }, include: { employee: true } });
+    if (!request) throw new NotFoundException('Request not found');
+    const access = await this.requestAccess(user, request, 'view');
+    const visibility = dto.visibility ?? HrRequestCommentVisibility.PUBLIC;
+    if (visibility === HrRequestCommentVisibility.INTERNAL && !access.canSeeInternal) {
+      throw new ForbiddenException('Internal notes are restricted to reviewers');
+    }
+    const comment = await this.prisma.hrRequestComment.create({
+      data: {
+        requestId: id,
+        authorUserId: user.userId,
+        visibility,
+        body,
+      },
+      include: { author: { select: { fullName: true, roles: { include: { role: true } } } } },
+    });
+    await this.audit.log(user.userId, 'REQUEST_COMMENT_CREATE', 'HrRequest', id, 'SUCCESS', { visibility });
+    return comment;
   }
 
   async createDocumentRequest(userId: string, dto: { templateId: string; note?: string; formData?: Record<string, unknown> }) {
@@ -192,6 +341,7 @@ export class EmployeesService {
     const fieldSchema = normalizeTemplateFieldSchema(template.fieldSchema);
     const cleanFormData = sanitizeFormData(dto.formData);
     this.templateData.assertComplete(fieldSchema, employee, cleanFormData);
+    const storedFormData = redactFormDataForStorage(fieldSchema, cleanFormData);
 
     const request = await this.prisma.hrRequest.create({
       data: {
@@ -203,9 +353,10 @@ export class EmployeesService {
         status: 'PENDING',
         priority: 'NORMAL',
         note: dto.note,
-        formData: cleanFormData,
+        formData: storedFormData,
       }
     });
+    await this.generationService.generateDocument(request.id, cleanFormData);
     await this.notifyRequestReviewers(employee, request.id, request.requestType);
     return request;
   }
@@ -294,6 +445,7 @@ export class EmployeesService {
         comment: comment || (status === 'PENDING' ? 'Demande rouverte pour révision' : null),
       }
     });
+    await this.audit.log(reviewer.userId, `REQUEST_${status}`, 'HrRequest', id, 'SUCCESS', { comment });
 
     const requestEmployee = await this.prisma.employee.findUnique({
       where: { id: req.employeeId },
@@ -314,6 +466,8 @@ export class EmployeesService {
         }.`,
         resourceType: 'HrRequest',
         resourceId: req.id,
+        actionUrl: `/requests/${req.id}`,
+        priority: status === 'REJECTED' ? 'HIGH' : 'NORMAL',
       });
     }
 
@@ -353,10 +507,13 @@ export class EmployeesService {
          });
       }
     } else if (status === 'APPROVED' && req.kind === 'DOCUMENT') {
-      // Trigger generation async without awaiting to not block response
-      this.generationService.generateDocument(req.id).catch(e => {
-        console.error(`Failed to generate document for request ${req.id}`, e);
-      });
+      const generated = await this.prisma.generatedDocument.findUnique({ where: { requestId: req.id } });
+      if (generated) {
+        await this.prisma.generatedDocument.update({
+          where: { id: generated.id },
+          data: { status: 'APPROVED', validatedBy: reviewer.userId },
+        });
+      }
     }
 
     return req;
@@ -453,6 +610,21 @@ export class EmployeesService {
     return actor ? { managerId: actor.id } : { id: 'none' };
   }
 
+  private async requestAccess(
+    user: AuthenticatedUser,
+    request: { employeeId: string; employee: { managerId: string | null } },
+    mode: 'view' | 'review',
+  ) {
+    if (user.role === 'ADMIN' || user.role === 'HR') return { canSeeInternal: true };
+    const actor = await this.prisma.employee.findUnique({ where: { userId: user.userId } });
+    const isOwner = actor?.id === request.employeeId;
+    if (mode === 'view' && isOwner) return { canSeeInternal: false };
+    if (user.role === 'MANAGER' && actor?.id && request.employee.managerId === actor.id) {
+      return { canSeeInternal: true };
+    }
+    throw new ForbiddenException('Request access denied');
+  }
+
   private sanitizeEmployee(employee: any, user: AuthenticatedUser) {
     if (user.role === 'ADMIN' || user.role === 'HR') return employee;
     const safe = { ...employee };
@@ -474,6 +646,8 @@ export class EmployeesService {
       message: `${employee.firstName} ${employee.lastName} : ${requestType}.`,
       resourceType: 'HrRequest',
       resourceId: requestId,
+      actionUrl: `/requests/${requestId}`,
+      priority: 'NORMAL',
     });
     if (employee.managerId) {
       const manager = await this.prisma.employee.findUnique({
@@ -488,6 +662,8 @@ export class EmployeesService {
           message: `${employee.firstName} ${employee.lastName} : ${requestType}.`,
           resourceType: 'HrRequest',
           resourceId: requestId,
+          actionUrl: `/requests/${requestId}`,
+          priority: 'NORMAL',
         });
       }
     }

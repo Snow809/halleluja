@@ -22,6 +22,7 @@ export function roleToShell(role: BackendRole): AppShell | null {
   if (role === "HR") return "hr";
   if (role === "MANAGER") return "manager";
   if (role === "ADMIN") return "admin";
+  if (role === "QVT") return "qvt";
   return null;
 }
 

@@ -121,28 +121,33 @@ export class RagService {
       throw new BadRequestException('Only approved documents can be indexed');
     }
 
-    const file = await this.s3.getFileBuffer(document.filePath);
-    const parsed = await this.parser.parseBuffer(file, document.fileType);
-    const chunks = this.chunkText(parsed.text);
-    if (chunks.length === 0) {
-      throw new BadRequestException('The document contains no indexable text');
-    }
-
-    await this.prisma.documentChunk.deleteMany({ where: { documentId } });
-
-    const createdChunks = await this.prisma.$transaction(
-      chunks.map((chunkText, chunkOrder) =>
-        this.prisma.documentChunk.create({
-          data: {
-            documentId,
-            chunkText,
-            chunkOrder,
-          },
-        }),
-      ),
-    );
+    await this.prisma.hrDocument.update({
+      where: { id: documentId },
+      data: { indexedStatus: 'INDEXING', indexError: null },
+    });
 
     try {
+      const file = await this.s3.getFileBuffer(document.filePath);
+      const parsed = await this.parser.parseBuffer(file, document.fileType);
+      const chunks = this.chunkText(parsed.text);
+      if (chunks.length === 0) {
+        throw new BadRequestException('The document contains no indexable text');
+      }
+
+      await this.prisma.documentChunk.deleteMany({ where: { documentId } });
+
+      const createdChunks = await this.prisma.$transaction(
+        chunks.map((chunkText, chunkOrder) =>
+          this.prisma.documentChunk.create({
+            data: {
+              documentId,
+              chunkText,
+              chunkOrder,
+            },
+          }),
+        ),
+      );
+
       for (const chunk of createdChunks) {
         const embedding = await this.embeddings.generateEmbedding(
           `${document.title}\n${document.category}\n\n${chunk.chunkText}`,
@@ -157,16 +162,37 @@ export class RagService {
           WHERE "id" = ${chunk.id}
         `;
       }
+      await this.prisma.hrDocument.update({
+        where: { id: documentId },
+        data: { indexedStatus: 'INDEXED', indexedAt: new Date(), indexError: null },
+      });
+      await this.auditService.log(undefined, 'DOCUMENT_REINDEX', 'HrDocument', documentId, 'SUCCESS', {
+        chunksCreated: createdChunks.length,
+      });
+      return { documentId, status: 'indexed', chunksCreated: createdChunks.length };
     } catch (error) {
       await this.prisma.documentChunk.deleteMany({ where: { documentId } });
+      await this.prisma.hrDocument.update({
+        where: { id: documentId },
+        data: {
+          indexedStatus: 'FAILED',
+          indexError: error instanceof Error ? error.message : 'Unknown indexing error',
+        },
+      });
+      await this.auditService.log(undefined, 'DOCUMENT_REINDEX', 'HrDocument', documentId, 'FAILED', {
+        error: error instanceof Error ? error.message : 'Unknown indexing error',
+      });
       throw error;
     }
-
-    return { documentId, status: 'indexed', chunksCreated: createdChunks.length };
   }
 
   async removeDocumentIndex(documentId: string) {
-    return this.prisma.documentChunk.deleteMany({ where: { documentId } });
+    const result = await this.prisma.documentChunk.deleteMany({ where: { documentId } });
+    await this.prisma.hrDocument.update({
+      where: { id: documentId },
+      data: { indexedStatus: 'NOT_INDEXED', indexedAt: null, indexError: null },
+    });
+    return result;
   }
 
   async reindexApprovedDocuments() {

@@ -9,6 +9,7 @@ export interface TemplateFieldDefinition {
   source: TemplateFieldSource;
   required: boolean;
   sensitive?: boolean;
+  storagePolicy?: 'STORE_SAFE' | 'TRANSIENT_ONLY';
   inputType?: TemplateFieldInputType;
   aliases?: string[];
 }
@@ -25,16 +26,18 @@ const KNOWN_FIELDS: Record<string, Omit<TemplateFieldDefinition, 'label'>> = {
   },
   '[Numéro CIN]': {
     key: 'cinNumber',
-    source: 'EMPLOYEE',
+    source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     aliases: ['cin', 'cni', 'identity number'],
   },
   '[Numéro CNSS personnel]': {
     key: 'cnssNumber',
-    source: 'EMPLOYEE',
+    source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     aliases: ['cnss', 'numéro cnss', 'social security number'],
   },
   "[Nom de la compagnie d'assurance, ex: Wafa Assurance, RMA, Sanlam]": {
@@ -49,6 +52,7 @@ const KNOWN_FIELDS: Record<string, Omit<TemplateFieldDefinition, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     aliases: ['police', 'policy number', 'numéro police'],
   },
   "[Date d'embauche]": {
@@ -91,6 +95,7 @@ const KNOWN_FIELDS: Record<string, Omit<TemplateFieldDefinition, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     inputType: 'number',
     aliases: ['brut', 'rémunération brute', 'gross salary'],
   },
@@ -99,6 +104,7 @@ const KNOWN_FIELDS: Record<string, Omit<TemplateFieldDefinition, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     inputType: 'number',
     aliases: ['net imposable', 'taxable salary'],
   },
@@ -107,6 +113,7 @@ const KNOWN_FIELDS: Record<string, Omit<TemplateFieldDefinition, 'label'>> = {
     source: 'REQUEST',
     required: true,
     sensitive: true,
+    storagePolicy: 'TRANSIENT_ONLY',
     inputType: 'number',
     aliases: ['ir', 'impôt', 'tax withheld'],
   },
@@ -200,6 +207,7 @@ export function normalizeTemplateFieldSchema(value: unknown): TemplateFieldSchem
       source: field.source,
       required: Boolean(field.required),
       sensitive: Boolean(field.sensitive),
+      storagePolicy: field.storagePolicy === 'TRANSIENT_ONLY' ? 'TRANSIENT_ONLY' : 'STORE_SAFE',
       inputType: field.inputType,
       aliases: Array.isArray(field.aliases) ? field.aliases.filter((item) => typeof item === 'string') : [],
     }));
@@ -231,6 +239,25 @@ export function sanitizeFormData(value: unknown): Record<string, string> {
       .map(([key, item]) => [key, String(item).trim()])
       .filter(([, item]) => item.length > 0),
   );
+}
+
+
+export function redactFormDataForStorage(
+  schema: TemplateFieldSchema,
+  value: unknown,
+): Record<string, string | boolean> {
+  const formData = sanitizeFormData(value);
+  const fields = new Map(schema.map((field) => [field.key, field]));
+  const safe: Record<string, string | boolean> = {};
+  for (const [key, item] of Object.entries(formData)) {
+    const field = fields.get(key);
+    if (field?.storagePolicy === 'TRANSIENT_ONLY' || field?.sensitive) {
+      safe[key] = true;
+    } else {
+      safe[key] = item;
+    }
+  }
+  return safe;
 }
 
 function slugKey(label: string) {

@@ -20,3 +20,8 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+
+# Local QVT ML data/artifacts
+hr-ai-backend/ml/data/
+hr-ai-backend/ml/artifacts/
+hr-ai-backend/ml/.venv/

@@ -31,22 +31,35 @@ export class TemplatesController {
   @Roles(UserRole.HR, UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('file'))
   update(
+    @CurrentUser() user: any,
     @Param('id') id: string,
     @Body() body: UpdateTemplateDto,
     @UploadedFile() file?: Express.Multer.File,
   ) {
-    return this.templatesService.update(id, body, file);
+    return this.templatesService.update(id, body, file, user.userId);
+  }
+
+  @Get(':id/fields')
+  @Roles(UserRole.HR, UserRole.ADMIN)
+  getFields(@Param('id') id: string) {
+    return this.templatesService.getFields(id);
+  }
+
+  @Patch(':id/fields')
+  @Roles(UserRole.HR, UserRole.ADMIN)
+  updateFields(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { fields: unknown }) {
+    return this.templatesService.updateFields(id, body.fields, user.userId);
   }
 
   @Patch(':id/active')
   @Roles(UserRole.HR, UserRole.ADMIN)
-  toggleActive(@Param('id') id: string, @Body() body: { isActive: boolean }) {
-    return this.templatesService.toggleActive(id, body.isActive);
+  toggleActive(@CurrentUser() user: any, @Param('id') id: string, @Body() body: { isActive: boolean }) {
+    return this.templatesService.toggleActive(id, body.isActive, user.userId);
   }
 
   @Delete(':id')
   @Roles(UserRole.HR, UserRole.ADMIN)
-  remove(@Param('id') id: string) {
-    return this.templatesService.delete(id);
+  remove(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.templatesService.delete(id, user.userId);
   }
 }

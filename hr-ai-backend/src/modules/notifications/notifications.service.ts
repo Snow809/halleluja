@@ -1,14 +1,18 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { NotificationType } from '@prisma/client';
+import { NotificationPriority, NotificationType } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 
 @Injectable()
 export class NotificationsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(userId: string) {
+  list(userId: string, filters?: { unread?: boolean; type?: string; priority?: string }) {
+    const where: any = { userId };
+    if (filters?.unread) where.readAt = null;
+    if (filters?.type) where.type = filters.type;
+    if (filters?.priority) where.priority = filters.priority;
     return this.prisma.notification.findMany({
-      where: { userId },
+      where,
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
@@ -37,6 +41,8 @@ export class NotificationsService {
     message: string;
     resourceType?: string;
     resourceId?: string;
+    actionUrl?: string;
+    priority?: NotificationPriority;
   }) {
     return this.prisma.notification.create({ data });
   }

@@ -4,7 +4,7 @@ import { AlertTriangle, Bot, ClipboardList, TrendingUp, Users } from "lucide-rea
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useDashboardQuery, useRequests } from "@/api/queries";
-import { Employee } from "@/api/types";
+import { Employee, QvtAggregateSummary } from "@/api/types";
 import { BlueBarChart, BlueRadarChart } from "@/purity/charts";
 import { PageHeader, SalesOverview, StatCard } from "@/purity/dashboard";
 
@@ -13,9 +13,12 @@ export function ManagerDashboard() {
   const performance = useDashboardQuery<Array<{ subject: string; A: number }>>("team-perf");
   const output = useDashboardQuery<Array<{ day: string; tasks: number }>>("weekly-output");
   const requests = useRequests("PENDING");
-  const risks = useQuery({ queryKey: ["risk-alerts"], queryFn: () => api.get<any[]>("/employee-risk-alerts") });
+  const qvt = useQuery({
+    queryKey: ["qvt", "manager", "summary"],
+    queryFn: () => api.get<QvtAggregateSummary>("/qvt/manager/team-summary"),
+  });
   const avg = team.data?.length ? Math.round(team.data.reduce((sum, employee) => sum + employee.performanceScore, 0) / team.data.length) : 0;
-  const openRisks = risks.data?.filter((item) => !item.resolvedAt).length ?? 0;
+  const burnoutRisk = qvt.data?.available ? Math.round(qvt.data.averageBurnoutRisk ?? 0) : 0;
   const performanceData = performance.data ?? [];
   const outputData = output.data ?? [];
 
@@ -30,7 +33,7 @@ export function ManagerDashboard() {
         <StatCard label="Membres équipe" value={team.data?.length ?? 0} icon={Users} />
         <StatCard label="Demandes en attente" value={requests.data?.length ?? 0} icon={ClipboardList} />
         <StatCard label="Score équipe" value={`${avg}%`} tone="green" icon={TrendingUp} />
-        <StatCard label="Alertes risques" value={openRisks} tone={openRisks ? "orange" : "blue"} icon={AlertTriangle} />
+        <StatCard label="QVT agr?g?e" value={qvt.data?.available ? `${burnoutRisk}%` : "n/a"} tone={burnoutRisk >= 65 ? "orange" : "blue"} icon={AlertTriangle} />
       </SimpleGrid>
       <SimpleGrid columns={{ base: 1, xl: 2 }} spacing={5}>
         <SalesOverview
